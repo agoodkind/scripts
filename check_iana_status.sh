@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+# Check IANA status for any query
+# Usage: ./check_iana_status.sh <query>
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <query>"
+    echo "Example: $0 '3c00::/7'"
+    exit 1
+fi
+
+whois -h whois.iana.org "$1" | grep "status" | awk '{print $2}'
