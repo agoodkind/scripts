@@ -1,0 +1,90 @@
+#!/bin/bash
+set -e
+
+echo "==================================="
+echo "Let's Encrypt + Cloudflare Setup"
+echo "==================================="
+echo
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root"
+   exit 1
+fi
+
+# Install required packages
+echo "Installing certbot and Cloudflare DNS plugin..."
+apt update
+apt install -y certbot python3-certbot-dns-cloudflare
+
+# Get domain name
+read -p "Enter your domain (e.g., logs.home.goodkind.io): " DOMAIN
+read -p "Include wildcard? (y/n): " WILDCARD
+
+# Get Cloudflare API token
+echo
+echo "To create a Cloudflare API token:"
+echo "1. Go to https://dash.cloudflare.com/profile/api-tokens"
+echo "2. Click 'Create Token'"
+echo "3. Use 'Edit zone DNS' template"
+echo "4. Select your zone under 'Zone Resources'"
+echo "5. Click 'Continue to summary' then 'Create Token'"
+echo
+read -sp "Paste your Cloudflare API token: " CF_TOKEN
+echo
+
+# Get email for Let's Encrypt notifications
+read -p "Enter email for Let's Encrypt notifications: " EMAIL
+
+# Create credentials directory
+mkdir -p /etc/letsencrypt
+mkdir -p /root/.secrets/certbot
+
+# Create Cloudflare credentials file
+cat > /root/.secrets/certbot/cloudflare.ini << EOF
+# Cloudflare API token used by Certbot
+dns_cloudflare_api_token = ${CF_TOKEN}
+EOF
+
+chmod 600 /root/.secrets/certbot/cloudflare.ini
+
+# Build certbot command
+CERTBOT_CMD="certbot certonly --dns-cloudflare \
+  --dns-cloudflare-credentials /root/.secrets/certbot/cloudflare.ini \
+  --dns-cloudflare-propagation-seconds 60 \
+  --non-interactive \
+  --agree-tos \
+  --email ${EMAIL} \
+  -d ${DOMAIN}"
+
+if [[ "$WILDCARD" == "y" ]]; then
+  CERTBOT_CMD="${CERTBOT_CMD} -d *.${DOMAIN}"
+fi
+
+# Request certificate
+echo
+echo "Requesting certificate..."
+eval $CERTBOT_CMD
+
+echo
+echo "==================================="
+echo "Certificate generated successfully!"
+echo "==================================="
+echo
+echo "Certificate locations:"
+echo "  Fullchain: /etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+echo "  Private Key: /etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+echo "  Certificate: /etc/letsencrypt/live/${DOMAIN}/cert.pem"
+echo "  Chain: /etc/letsencrypt/live/${DOMAIN}/chain.pem"
+echo
+echo "Auto-renewal is enabled via systemd timer."
+echo "Test renewal with: certbot renew --dry-run"
+echo
+
+# Test renewal
+echo "Testing auto-renewal..."
+certbot renew --dry-run
+
+echo
+echo "Setup complete!"
+
