@@ -23,6 +23,9 @@ pct exec $CTID -- apt-get update
 echo "→ Upgrading packages..."
 pct exec $CTID -- apt-get -o Dpkg::Options::="--force-confold" -y dist-upgrade
 
+echo "→ Installing essential packages..."
+pct exec $CTID -- apt-get install -y neovim htop curl wget net-tools
+
 echo "→ Setting 256-color terminal..."
 pct exec $CTID -- bash -c 'grep -qxF "export TERM=\"xterm-256color\"" /root/.bashrc || echo "export TERM=\"xterm-256color\"" >> /root/.bashrc'
 
