@@ -150,7 +150,7 @@ while true; do
       --arg ip "$NEW_IP" \
       --arg ipv6 "$NEW_IPV6" \
       '{cloudflare_a: $ip, cloudflare_aaaa: $ipv6}')
-    log_to_logstash "INFO" "query_cloudflare" "$DETAILS"
+    log_to_logstash "DEBUG" "query_cloudflare" "$DETAILS"
 
     # Query local BIND server for current records
     CURRENT_IP=$(query_bind "$TARGET_RECORD" "A")
@@ -161,7 +161,7 @@ while true; do
       --arg ip "$CURRENT_IP" \
       --arg ipv6 "$CURRENT_IPV6" \
       '{current_a: $ip, current_aaaa: $ipv6}')
-    log_to_logstash "INFO" "query_bind" "$DETAILS"
+    log_to_logstash "DEBUG" "query_bind" "$DETAILS"
 
     # Compare Cloudflare and BIND records - update if different
     if [ "$NEW_IP" != "$CURRENT_IP" ] \
