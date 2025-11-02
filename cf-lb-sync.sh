@@ -1,12 +1,25 @@
+
 #!/usr/bin/env bash
+#
+# cf-lb-sync.sh
+#
+# Common commands:
+#   systemctl start cf-lb-sync.service
+#   systemctl stop cf-lb-sync.service
+#   systemctl restart cf-lb-sync.service
+#   systemctl status cf-lb-sync.service
+#   systemctl enable cf-lb-sync.service
+#   systemctl disable cf-lb-sync.service
+#
+# Systemd unit file location:
+#   /etc/systemd/system/cf-lb-sync.service
 
 set -euo pipefail
 
 #
 # push this file with :
 #
-# scp bind-lb-sync.sh root@vault:/tmp/bind-lb-sync.sh && \ 
-#   ssh root@vault "pct push 106 /tmp/bind-lb-sync.sh /usr/local/bin/bind-lb-sync.sh"
+# scp cf-lb-sync.sh root@vault:/tmp/cf-lb-sync.sh && ssh root@vault "pct push 106 /tmp/cf-lb-sync.sh /usr/local/bin/cf-lb-sync.sh"
 #
 # DNS Load Balancer Sync Script
 # Monitors Cloudflare DNS and syncs changes to local BIND server
@@ -39,7 +52,7 @@ log_to_logstash() {
     local json=$(cat <<JSON
 {
   "@timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)",
-  "service": "bind-lb-sync",
+  "service": "cf-lb-sync",
   "host": {
     "name": "$(hostname)"
   },
