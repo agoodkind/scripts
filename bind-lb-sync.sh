@@ -1,7 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
+#
+# push this file with :
+#
+# scp bind-lb-sync.sh root@vault:/tmp/bind-lb-sync.sh && \ 
+#   ssh root@vault "pct push 106 /tmp/bind-lb-sync.sh /usr/local/bin/bind-lb-sync.sh"
+#
 # DNS Load Balancer Sync Script
 # Monitors Cloudflare DNS and syncs changes to local BIND server
 # Logs all actions to Logstash for monitoring and alerting
@@ -37,6 +43,7 @@ log_to_logstash() {
   "host": {
     "name": "$(hostname)"
   },
+  "log_type": "json",
   "log_level": "$level",
   "action": "$action",
   "details": $details,
@@ -163,8 +170,8 @@ while true; do
 zone home.goodkind.io
 update delete $TARGET_RECORD A
 update delete $TARGET_RECORD AAAA
-update add $TARGET_RECORD 10 A $NEW_IP
-update add $TARGET_RECORD 30 AAAA $NEW_IPV6
+update add $TARGET_RECORD 5 A $NEW_IP
+update add $TARGET_RECORD 5 AAAA $NEW_IPV6
 send
 NSUPDATE
 )
@@ -176,8 +183,8 @@ NSUPDATE
               --arg a "$NEW_IP" \
               --arg aaaa "$NEW_IPV6" \
               --arg zone "$TARGET_RECORD" \
-              '{zone: $zone, updated_a: $a, ttl_a: 10,
-                updated_aaaa: $aaaa, ttl_aaaa: 30}')
+              '{zone: $zone, updated_a: $a,
+                updated_aaaa: $aaaa, ttl: 5}')
             log_to_logstash "SUCCESS" "ddns_update" "$DETAILS"
         else
             DETAILS=$(jq -n --arg err "$UPDATE_OUTPUT" \
