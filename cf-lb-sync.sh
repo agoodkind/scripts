@@ -19,61 +19,100 @@ set -euo pipefail
 #
 # push this file with :
 #
-# scp cf-lb-sync.sh root@vault:/tmp/cf-lb-sync.sh && ssh root@vault "pct push 106 /tmp/cf-lb-sync.sh /usr/local/bin/cf-lb-sync.sh"
+# scp cf-lb-sync.sh root@vault:/tmp/cf-lb-sync.sh && \
+#   ssh root@vault "pct push 106 /tmp/cf-lb-sync.sh \
+#     /usr/local/bin/cf-lb-sync.sh"
 #
 # DNS Load Balancer Sync Script
 # Monitors Cloudflare DNS and syncs changes to local BIND server
 # Logs all actions to Logstash for monitoring and alerting
 
 # DNS records to monitor and sync
-RECORD_NAME="lb-home.goodkind.io"        # Cloudflare source
+SOURCE_RECORD="lb-home.goodkind.io"      # Cloudflare source
 TARGET_RECORD="home.goodkind.io"         # BIND target
 LOGSTASH_HOST="logstash.home.goodkind.io"
 LOGSTASH_PORT=5044
 
 # Graceful shutdown handler
 cleanup() {
-    local details
-    details=$(jq -n '{message: "Script shutting down"}')
-    log_to_logstash "INFO" "shutdown" "$details"
+    log_to_logstash "info" "shutdown" "$CURRENT_IP" "$CURRENT_IPV6" \
+        "Script shutting down" "success"
     exit 0
 }
 
 trap cleanup SIGINT SIGTERM
 
-# Send structured JSON logs to Logstash via TCP
-# Args: log_level, action, details (JSON object)
+# Send ECS-compliant JSON logs to Logstash via HTTP
+# Args: level, action, new_ipv4, new_ipv6, message, outcome,
+#       [old_ipv4], [old_ipv6]
 log_to_logstash() {
     local level=$1
     local action=$2
-    local details=$3
+    local new_ipv4=$3
+    local new_ipv6=$4
+    local message=${5:-""}
+    local outcome=${6:-"unknown"}
+    local old_ipv4=${7:-""}
+    local old_ipv6=${8:-""}
 
-    # Build JSON log entry with service identifier
+    # Build change tracking section if old values provided
+    local change_json=""
+    if [ -n "$old_ipv4" ] || [ -n "$old_ipv6" ]; then
+        change_json=$(cat <<CHANGE
+  "old": {
+    "a": "$old_ipv4",
+    "aaaa": "$old_ipv6"
+  },
+  "new": {
+    "a": "$new_ipv4",
+    "aaaa": "$new_ipv6"
+  },
+CHANGE
+)
+    fi
+
+    # Build ECS-compliant JSON log entry
     local json=$(cat <<JSON
 {
   "@timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)",
-  "service": "cf-lb-sync",
+  "service": {
+    "name": "cf-lb-sync",
+    "type": "dns-monitor"
+  },
   "host": {
     "name": "$(hostname)"
   },
-  "log_type": "json",
-  "log_level": "$level",
-  "action": "$action",
-  "details": $details,
-  "data_stream": {
-    "type": "logs",
-    "dataset": "lbsync",
-    "namespace": "bind"
-  }
+  "log": {
+    "level": "$level"
+  },
+  "event": {
+    "action": "$action",
+    "category": ["network"],
+    "type": ["info"],
+    "outcome": "$outcome"
+  },
+$change_json 
+  "source": "$SOURCE_RECORD",
+  "target": "$TARGET_RECORD",
+  "message": "$message"
 }
 JSON
 )
 
     # Send compacted JSON to Logstash via HTTP
-    echo "$json" | jq -c '.' 2>/dev/null \
+    local curl_output
+    local http_code
+    curl_output=$(echo "$json" | jq -c '.' 2>/dev/null \
       | curl -s -X POST -H "Content-Type: application/json" \
-        -d @- "http://$LOGSTASH_HOST:$LOGSTASH_PORT" \
-        > /dev/null 2>&1 || true
+        -w "\n%{http_code}" \
+        -d @- "http://$LOGSTASH_HOST:$LOGSTASH_PORT" 2>&1) || true
+    
+    http_code=$(echo "$curl_output" | tail -n1)
+    if [ -z "$http_code" ] || [ "$http_code" -lt 200 ] \
+       || [ "$http_code" -ge 300 ]; then
+        logger -t cf-lb-sync \
+            "Failed to send log to logstash: http_code=$http_code"
+    fi
 }
 
 # Validate IPv4 address format
@@ -113,69 +152,46 @@ query_bind() {
     dig +short "$record" @localhost "$type" | head -1
 }
 
+# Query local BIND server for current records
+CURRENT_IP=$(query_bind "$TARGET_RECORD" "A")
+CURRENT_IPV6=$(query_bind "$TARGET_RECORD" "AAAA")
+
+logger -t cf-lb-sync "Starting cf-lb-sync script"
+log_to_logstash "info" "startup" "$CURRENT_IP" "$CURRENT_IPV6" \
+    "DNS sync service started" "success"
+
 # Main sync loop - runs every 5 seconds
 while true; do
     # Query Cloudflare DNS for current A and AAAA records
-    NEW_IP=$(query_cloudflare "$RECORD_NAME" "A" "1.1.1.1")
-    NEW_IPV6=$(query_cloudflare "$RECORD_NAME" "AAAA" "2606:4700:4700::1111")
+    NEW_IP=$(query_cloudflare "$SOURCE_RECORD" "A" "1.1.1.1")
+    NEW_IPV6=$(query_cloudflare "$SOURCE_RECORD" "AAAA" "2606:4700:4700::1111")
 
     # If Cloudflare query fails, log error and retry
     if [ -z "$NEW_IP" ] || [ -z "$NEW_IPV6" ]; then
-        DETAILS=$(jq -n --arg msg "Cloudflare query failed" \
-          '{error: $msg}')
-        log_to_logstash "ERROR" "query_cloudflare" "$DETAILS"
+        log_to_logstash "error" "query_failed" "$NEW_IP" "$NEW_IPV6" \
+            "Failed to query Cloudflare DNS" "failure"
         sleep 5
         continue
     fi
 
     # Validate IP addresses to prevent DNS poisoning
-    if ! is_valid_ipv4 "$NEW_IP"; then
-        DETAILS=$(jq -n --arg ip "$NEW_IP" \
-          '{error: "Invalid IPv4 address", invalid_ip: $ip}')
-        log_to_logstash "ERROR" "validation_failed" "$DETAILS"
+    if ! is_valid_ipv4 "$NEW_IP" || ! is_valid_ipv6 "$NEW_IPV6"; then
+        log_to_logstash "error" "validation_failed" \
+            "$NEW_IP" "$NEW_IPV6" \
+            "IP address validation failed" "failure"
         sleep 5
         continue
     fi
-
-    if ! is_valid_ipv6 "$NEW_IPV6"; then
-        DETAILS=$(jq -n --arg ip "$NEW_IPV6" \
-          '{error: "Invalid IPv6 address", invalid_ip: $ip}')
-        log_to_logstash "ERROR" "validation_failed" "$DETAILS"
-        sleep 5
-        continue
-    fi
-
-    # Log successful Cloudflare query results
-    DETAILS=$(jq -n \
-      --arg ip "$NEW_IP" \
-      --arg ipv6 "$NEW_IPV6" \
-      '{cloudflare_a: $ip, cloudflare_aaaa: $ipv6}')
-    log_to_logstash "DEBUG" "query_cloudflare" "$DETAILS"
-
-    # Query local BIND server for current records
-    CURRENT_IP=$(query_bind "$TARGET_RECORD" "A")
-    CURRENT_IPV6=$(query_bind "$TARGET_RECORD" "AAAA")
-
-    # Log current BIND records
-    DETAILS=$(jq -n \
-      --arg ip "$CURRENT_IP" \
-      --arg ipv6 "$CURRENT_IPV6" \
-      '{current_a: $ip, current_aaaa: $ipv6}')
-    log_to_logstash "DEBUG" "query_bind" "$DETAILS"
 
     # Compare Cloudflare and BIND records - update if different
     if [ "$NEW_IP" != "$CURRENT_IP" ] \
        || [ "$NEW_IPV6" != "$CURRENT_IPV6" ]; then
         
-        # Log the detected change
-        DETAILS=$(jq -n \
-          --arg old_a "$CURRENT_IP" \
-          --arg new_a "$NEW_IP" \
-          --arg old_aaaa "$CURRENT_IPV6" \
-          --arg new_aaaa "$NEW_IPV6" \
-          '{old_a: $old_a, new_a: $new_a,
-            old_aaaa: $old_aaaa, new_aaaa: $new_aaaa}')
-        log_to_logstash "WARN" "record_changed" "$DETAILS"
+        # Log the detected change with old/new comparison
+        log_to_logstash "info" "record_changed" \
+            "$NEW_IP" "$NEW_IPV6" \
+            "DNS record change detected" "success" \
+            "$CURRENT_IP" "$CURRENT_IPV6"
 
         # Perform dynamic DNS update to BIND
         # Use -l flag for localhost-only mode (no server command needed)
@@ -190,27 +206,20 @@ NSUPDATE
 )
         UPDATE_EXIT_CODE=$?
 
-        # Log update success or failure
+        # Log update success or failure with old/new comparison
         if [ $UPDATE_EXIT_CODE -eq 0 ]; then
-            DETAILS=$(jq -n \
-              --arg a "$NEW_IP" \
-              --arg aaaa "$NEW_IPV6" \
-              --arg zone "$TARGET_RECORD" \
-              '{zone: $zone, updated_a: $a,
-                updated_aaaa: $aaaa, ttl: 5}')
-            log_to_logstash "SUCCESS" "ddns_update" "$DETAILS"
+            log_to_logstash "info" "ddns_update" \
+                "$NEW_IP" "$NEW_IPV6" \
+                "BIND DNS records updated successfully" "success" \
+                "$CURRENT_IP" "$CURRENT_IPV6"
+            CURRENT_IP=$NEW_IP
+            CURRENT_IPV6=$NEW_IPV6
         else
-            DETAILS=$(jq -n --arg err "$UPDATE_OUTPUT" \
-              '{error: $err}')
-            log_to_logstash "ERROR" "ddns_update" "$DETAILS"
+            log_to_logstash "error" "ddns_update" \
+                "$NEW_IP" "$NEW_IPV6" \
+                "BIND DNS update failed" "failure" \
+                "$CURRENT_IP" "$CURRENT_IPV6"
         fi
-    else
-        # Records match - no update needed
-        DETAILS=$(jq -n \
-          --arg a "$CURRENT_IP" \
-          --arg aaaa "$CURRENT_IPV6" \
-          '{no_change_a: $a, no_change_aaaa: $aaaa}')
-        log_to_logstash "DEBUG" "no_change" "$DETAILS"
     fi
 
     # Wait 5 seconds before next check
