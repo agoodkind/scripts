@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # DNS Load Balancer Sync Script
 # Monitors Cloudflare DNS and syncs changes to local BIND server
 # Logs all actions to Logstash for monitoring and alerting
@@ -9,6 +11,16 @@ RECORD_NAME="lb-home.goodkind.io"        # Cloudflare source
 TARGET_RECORD="home.goodkind.io"         # BIND target
 LOGSTASH_HOST="logstash.home.goodkind.io"
 LOGSTASH_PORT=5044
+
+# Graceful shutdown handler
+cleanup() {
+    local details
+    details=$(jq -n '{message: "Script shutting down"}')
+    log_to_logstash "INFO" "shutdown" "$details"
+    exit 0
+}
+
+trap cleanup SIGINT SIGTERM
 
 # Send structured JSON logs to Logstash via TCP
 # Args: log_level, action, details (JSON object)
@@ -44,18 +56,71 @@ JSON
         > /dev/null 2>&1 || true
 }
 
+# Validate IPv4 address format
+is_valid_ipv4() {
+    local ip=$1
+    [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    
+    local IFS='.'
+    local -a octets=($ip)
+    for octet in "${octets[@]}"; do
+        [[ $octet -le 255 ]] || return 1
+    done
+    return 0
+}
+
+# Validate IPv6 address format
+is_valid_ipv6() {
+    local ip=$1
+    [[ $ip =~ ^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$ ]] || return 1
+    return 0
+}
+
+# Query Cloudflare for DNS records
+query_cloudflare() {
+    local record=$1
+    local type=$2
+    local nameserver=$3
+    
+    dig +short "$record" "@$nameserver" "$type" | head -1
+}
+
+# Query local BIND for DNS records
+query_bind() {
+    local record=$1
+    local type=$2
+    
+    dig +short "$record" @localhost "$type" | head -1
+}
+
 # Main sync loop - runs every 5 seconds
 while true; do
     # Query Cloudflare DNS for current A and AAAA records
-    NEW_IP=$(dig +short "$RECORD_NAME" @1.1.1.1 A | head -1)
-    NEW_IPV6=$(dig +short "$RECORD_NAME" \
-      @2606:4700:4700::1111 AAAA | head -1)
+    NEW_IP=$(query_cloudflare "$RECORD_NAME" "A" "1.1.1.1")
+    NEW_IPV6=$(query_cloudflare "$RECORD_NAME" "AAAA" "2606:4700:4700::1111")
 
     # If Cloudflare query fails, log error and retry
     if [ -z "$NEW_IP" ] || [ -z "$NEW_IPV6" ]; then
         DETAILS=$(jq -n --arg msg "Cloudflare query failed" \
           '{error: $msg}')
         log_to_logstash "ERROR" "query_cloudflare" "$DETAILS"
+        sleep 5
+        continue
+    fi
+
+    # Validate IP addresses to prevent DNS poisoning
+    if ! is_valid_ipv4 "$NEW_IP"; then
+        DETAILS=$(jq -n --arg ip "$NEW_IP" \
+          '{error: "Invalid IPv4 address", invalid_ip: $ip}')
+        log_to_logstash "ERROR" "validation_failed" "$DETAILS"
+        sleep 5
+        continue
+    fi
+
+    if ! is_valid_ipv6 "$NEW_IPV6"; then
+        DETAILS=$(jq -n --arg ip "$NEW_IPV6" \
+          '{error: "Invalid IPv6 address", invalid_ip: $ip}')
+        log_to_logstash "ERROR" "validation_failed" "$DETAILS"
         sleep 5
         continue
     fi
@@ -68,10 +133,8 @@ while true; do
     log_to_logstash "INFO" "query_cloudflare" "$DETAILS"
 
     # Query local BIND server for current records
-    CURRENT_IP=$(dig +short "$TARGET_RECORD" @localhost A \
-      | head -1)
-    CURRENT_IPV6=$(dig +short "$TARGET_RECORD" @localhost AAAA \
-      | head -1)
+    CURRENT_IP=$(query_bind "$TARGET_RECORD" "A")
+    CURRENT_IPV6=$(query_bind "$TARGET_RECORD" "AAAA")
 
     # Log current BIND records
     DETAILS=$(jq -n \
@@ -95,26 +158,26 @@ while true; do
         log_to_logstash "WARN" "record_changed" "$DETAILS"
 
         # Perform dynamic DNS update to BIND
-        UPDATE_OUTPUT=$(nsupdate -k /etc/bind/rndc.key \
-          << NSUPDATE 2>&1
-server 127.0.0.1
+        # Use -l flag for localhost-only mode (no server command needed)
+        UPDATE_OUTPUT=$(nsupdate -l << NSUPDATE 2>&1
 zone home.goodkind.io
 update delete $TARGET_RECORD A
 update delete $TARGET_RECORD AAAA
-update add $TARGET_RECORD 300 A $NEW_IP
-update add $TARGET_RECORD 300 AAAA $NEW_IPV6
+update add $TARGET_RECORD 10 A $NEW_IP
+update add $TARGET_RECORD 30 AAAA $NEW_IPV6
 send
 NSUPDATE
 )
+        UPDATE_EXIT_CODE=$?
 
         # Log update success or failure
-        if [ $? -eq 0 ]; then
+        if [ $UPDATE_EXIT_CODE -eq 0 ]; then
             DETAILS=$(jq -n \
               --arg a "$NEW_IP" \
               --arg aaaa "$NEW_IPV6" \
               --arg zone "$TARGET_RECORD" \
-              '{zone: $zone, updated_a: $a,
-                updated_aaaa: $aaaa, ttl: 300}')
+              '{zone: $zone, updated_a: $a, ttl_a: 10,
+                updated_aaaa: $aaaa, ttl_aaaa: 30}')
             log_to_logstash "SUCCESS" "ddns_update" "$DETAILS"
         else
             DETAILS=$(jq -n --arg err "$UPDATE_OUTPUT" \
