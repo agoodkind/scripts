@@ -30,6 +30,15 @@ echo "→ Setting timezone to host timezone..."
 HOST_TZ=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo "UTC")
 pct exec $CTID -- timedatectl set-timezone "$HOST_TZ"
 
+echo "→ Configuring rsyslog for local time..."
+pct exec $CTID -- bash -c 'cat > /etc/rsyslog.d/50-default-local.conf << "EOF"
+# Use local time instead of UTC
+$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat
+$template TraditionalFormatWithLocalTime,"%timegenerated% %HOSTNAME% %syslogtag%%msg:::drop-last-lf%\n"
+$ActionFileDefaultTemplate TraditionalFormatWithLocalTime
+EOF'
+pct exec $CTID -- systemctl restart rsyslog
+
 echo "→ Setting 256-color terminal..."
 pct exec $CTID -- bash -c 'grep -qxF "export TERM=\"xterm-256color\"" /root/.bashrc || echo "export TERM=\"xterm-256color\"" >> /root/.bashrc'
 

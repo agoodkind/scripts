@@ -99,6 +99,15 @@ $change_json
 JSON
 )
 
+    # Log to syslog (readable format, under 80 cols)
+    logger -t cf-lb-sync "$level: $action - $message"
+    logger -t cf-lb-sync "  outcome=$outcome"
+    logger -t cf-lb-sync "  source=$SOURCE_RECORD -> target=$TARGET_RECORD"
+    if [ -n "$old_ipv4" ] || [ -n "$old_ipv6" ]; then
+        logger -t cf-lb-sync "  old: A=$old_ipv4 AAAA=$old_ipv6"
+    fi
+    logger -t cf-lb-sync "  new: A=$new_ipv4 AAAA=$new_ipv6"
+
     # Send compacted JSON to Logstash via HTTP
     local curl_output
     local http_code
@@ -203,7 +212,7 @@ update add $TARGET_RECORD 5 A $NEW_IP
 update add $TARGET_RECORD 5 AAAA $NEW_IPV6
 send
 NSUPDATE
-)
+) || true
         UPDATE_EXIT_CODE=$?
 
         # Log update success or failure with old/new comparison
@@ -217,7 +226,7 @@ NSUPDATE
         else
             log_to_logstash "error" "ddns_update" \
                 "$NEW_IP" "$NEW_IPV6" \
-                "BIND DNS update failed" "failure" \
+                "BIND DNS update failed: $UPDATE_OUTPUT" "failure" \
                 "$CURRENT_IP" "$CURRENT_IPV6"
         fi
     fi
