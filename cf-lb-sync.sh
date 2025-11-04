@@ -32,6 +32,7 @@ SOURCE_RECORD="lb-home.goodkind.io"      # Cloudflare source
 TARGET_RECORD="home.goodkind.io"         # BIND target
 LOGSTASH_HOST="logstash.home.goodkind.io"
 LOGSTASH_PORT=5044
+TSIG_KEY="/etc/bind/keys/dhcp-update.key"
 
 # Graceful shutdown handler
 cleanup() {
@@ -55,58 +56,54 @@ log_to_logstash() {
     local old_ipv4=${7:-""}
     local old_ipv6=${8:-""}
 
-    # Build change tracking section if old values provided
-    local change_json=""
+    # Build change tracking fields if old values provided
+    local change_fields=""
     if [ -n "$old_ipv4" ] || [ -n "$old_ipv6" ]; then
-        change_json=$(cat <<CHANGE
-  "old": {
-    "a": "$old_ipv4",
-    "aaaa": "$old_ipv6"
-  },
-  "new": {
-    "a": "$new_ipv4",
-    "aaaa": "$new_ipv6"
-  },
+        change_fields=$(cat <<CHANGE
+  "old_ipv4": "$old_ipv4",
+  "old_ipv6": "$old_ipv6",
+  "new_ipv4": "$new_ipv4",
+  "new_ipv6": "$new_ipv6",
 CHANGE
 )
     fi
 
-    # Build ECS-compliant JSON log entry
+    # Build flattened JSON log entry
     local json=$(cat <<JSON
 {
   "@timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)",
-  "service": {
-    "name": "cf-lb-sync",
-    "type": "dns-monitor"
+  "data_stream": {
+    "type": "logs",
+    "dataset": "bind.cflbsync",
+    "namespace": "default"
   },
-  "host": {
-    "name": "$(hostname)"
-  },
-  "log": {
-    "level": "$level"
-  },
-  "event": {
-    "action": "$action",
-    "category": ["network"],
-    "type": ["info"],
-    "outcome": "$outcome"
-  },
-$change_json 
-  "source": "$SOURCE_RECORD",
-  "target": "$TARGET_RECORD",
+  "service_name": "cf-lb-sync",
+  "service_type": "dns-monitor",
+  "hostname": "$(hostname)",
+  "level": "$level",
+  "action": "$action",
+  "outcome": "$outcome",
+$change_fields
+  "source_record": "$SOURCE_RECORD",
+  "target_record": "$TARGET_RECORD",
   "message": "$message"
 }
 JSON
 )
 
     # Log to syslog (readable format, under 80 cols)
-    logger -t cf-lb-sync "$level: $action - $message"
-    logger -t cf-lb-sync "  outcome=$outcome"
-    logger -t cf-lb-sync "  source=$SOURCE_RECORD -> target=$TARGET_RECORD"
+    # Map level to syslog priority
+    local priority="user.info"
+    [ "$level" = "error" ] && priority="user.error"
+    [ "$level" = "warning" ] && priority="user.warning"
+    
+    logger -t cf-lb-sync -p "$priority" "$level: $action - $message"
+    logger -t cf-lb-sync -p "$priority" "  outcome=$outcome"
+    logger -t cf-lb-sync -p "$priority" "  source=$SOURCE_RECORD -> target=$TARGET_RECORD"
     if [ -n "$old_ipv4" ] || [ -n "$old_ipv6" ]; then
-        logger -t cf-lb-sync "  old: A=$old_ipv4 AAAA=$old_ipv6"
+        logger -t cf-lb-sync -p "$priority" "  old: A=$old_ipv4 AAAA=$old_ipv6"
     fi
-    logger -t cf-lb-sync "  new: A=$new_ipv4 AAAA=$new_ipv6"
+    logger -t cf-lb-sync -p "$priority" "  new: A=$new_ipv4 AAAA=$new_ipv6"
 
     # Send compacted JSON to Logstash via HTTP
     local curl_output
@@ -119,8 +116,7 @@ JSON
     http_code=$(echo "$curl_output" | tail -n1)
     if [ -z "$http_code" ] || [ "$http_code" -lt 200 ] \
        || [ "$http_code" -ge 300 ]; then
-        logger -t cf-lb-sync \
-            "Failed to send log to logstash: http_code=$http_code"
+        logger -t cf-lb-sync -p user.error "error: logstash_send_failed - http_code=$http_code"
     fi
 }
 
@@ -165,7 +161,7 @@ query_bind() {
 CURRENT_IP=$(query_bind "$TARGET_RECORD" "A")
 CURRENT_IPV6=$(query_bind "$TARGET_RECORD" "AAAA")
 
-logger -t cf-lb-sync "Starting cf-lb-sync script"
+logger -t cf-lb-sync -p user.info "Starting cf-lb-sync script"
 log_to_logstash "info" "startup" "$CURRENT_IP" "$CURRENT_IPV6" \
     "DNS sync service started" "success"
 
@@ -203,8 +199,10 @@ while true; do
             "$CURRENT_IP" "$CURRENT_IPV6"
 
         # Perform dynamic DNS update to BIND
-        # Use -l flag for localhost-only mode (no server command needed)
-        UPDATE_OUTPUT=$(nsupdate -l << NSUPDATE 2>&1
+        # Use TSIG key for authenticated updates (required for DNSSEC)
+        set +e
+        UPDATE_OUTPUT=$(nsupdate -k "$TSIG_KEY" << NSUPDATE 2>&1
+server ::1
 zone home.goodkind.io
 update delete $TARGET_RECORD A
 update delete $TARGET_RECORD AAAA
@@ -212,11 +210,17 @@ update add $TARGET_RECORD 5 A $NEW_IP
 update add $TARGET_RECORD 5 AAAA $NEW_IPV6
 send
 NSUPDATE
-) || true
+)
         UPDATE_EXIT_CODE=$?
+        set -e
+
+        # Check for REFUSED, NOTAUTH, or other errors in output
+        if echo "$UPDATE_OUTPUT" | grep -qi "refused\|notauth\|failed"; then
+            UPDATE_EXIT_CODE=1
+        fi
 
         # Log update success or failure with old/new comparison
-        if [ $UPDATE_EXIT_CODE -eq 0 ]; then
+        if [ $UPDATE_EXIT_CODE -eq 0 ] && ! echo "$UPDATE_OUTPUT" | grep -qi "error\|refused\|failed"; then
             log_to_logstash "info" "ddns_update" \
                 "$NEW_IP" "$NEW_IPV6" \
                 "BIND DNS records updated successfully" "success" \
