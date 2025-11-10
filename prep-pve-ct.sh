@@ -24,7 +24,7 @@ echo "→ Upgrading packages..."
 pct exec $CTID -- apt-get -o Dpkg::Options::="--force-confold" -y dist-upgrade
 
 echo "→ Installing essential packages..."
-pct exec $CTID -- apt-get install -y neovim htop curl wget net-tools
+pct exec $CTID -- apt-get install -y neovim htop curl wget net-tools 
 
 echo "→ Setting timezone to host timezone..."
 HOST_TZ=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo "UTC")
