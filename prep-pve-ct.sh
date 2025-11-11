@@ -63,9 +63,6 @@ execute bash -c 'grep -qxF "export TERM=\"xterm-256color\"" /root/.bashrc || ech
 echo "🧹 Removing '[ -z \"\$PS1\" ] && return' from /root/.bashrc if present..."
 execute bash -c 'sed -i "/\[ -z \"\$PS1\" \] && return/d" /root/.bashrc'
 
-echo "🙈 Disabling default MOTD scripts..."
-execute bash -c 'if [ -d /etc/update-motd.d/ ] && [ "$(ls -A /etc/update-motd.d/)" ]; then chmod -x /etc/update-motd.d/*; fi'
-
 echo "🔑 Configuring auto-login..."
 execute bash -c 'mkdir -p /etc/systemd/system/container-getty@1.service.d/ && cat > /etc/systemd/system/container-getty@1.service.d/override.conf << "EOF"
 [Service]
