@@ -2,6 +2,8 @@
 # Replicate ProxmoxVE container preparation steps
 # Usage: ./prepare-container.sh CTID
 
+set -euo pipefail
+
 CTID="${1}"
 
 if [ -z "$CTID" ]; then
@@ -10,6 +12,12 @@ if [ -z "$CTID" ]; then
 fi
 
 echo "Preparing container $CTID..."
+
+echo "→ Generating and setting en_US.UTF-8 locale..."
+pct exec $CTID -- bash -c 'apt-get install -y locales && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8'
+export_cmd='export LANG="en_US.UTF-8"\nexport LC_ALL="en_US.UTF-8"'
+pct exec $CTID -- bash -c "grep -qxF 'export LANG=\"en_US.UTF-8\"' /root/.bashrc || echo 'export LANG=\"en_US.UTF-8\"' >> /root/.bashrc"
+pct exec $CTID -- bash -c "grep -qxF 'export LC_ALL=\"en_US.UTF-8\"' /root/.bashrc || echo 'export LC_ALL=\"en_US.UTF-8\"' >> /root/.bashrc"
 
 echo "→ Removing Python EXTERNALLY-MANAGED blocks..."
 pct exec $CTID -- rm -rf /usr/lib/python3.*/EXTERNALLY-MANAGED
