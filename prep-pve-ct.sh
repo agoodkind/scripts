@@ -52,6 +52,9 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 $TERM
 EOF'
 
+echo "→ Lowering systemctl shutdown timeout to 15 seconds..."
+pct exec $CTID -- bash -c 'mkdir -p /etc/systemd/system.conf.d && echo -e "[Manager]\nDefaultTimeoutStopSec=15s" > /etc/systemd/system.conf.d/timeout.conf'
+
 echo "→ Reloading systemd..."
 pct exec $CTID -- systemctl daemon-reload
 
