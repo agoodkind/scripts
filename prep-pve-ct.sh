@@ -26,9 +26,17 @@ execute update-locale LANG=en_US.UTF-8
 execute bash -c "grep -qxF 'export LANG=\"en_US.UTF-8\"' /root/.bashrc || echo 'export LANG=\"en_US.UTF-8\"' >> /root/.bashrc"
 execute bash -c "grep -qxF 'export LC_ALL=\"en_US.UTF-8\"' /root/.bashrc || echo 'export LC_ALL=\"en_US.UTF-8\"' >> /root/.bashrc"
 
+echo "📦 Updating package lists..."
+execute apt-get update
+
+echo "⬆️  Upgrading packages..."
 execute apt-get -y upgrade
-execute apt-get -y dist-upgrade
+execute apt-get -o Dpkg::Options::="--force-confold" -y dist-upgrade
+
+echo "🛠️  Installing essential packages..."
 execute apt-get -y install neovim htop curl wget net-tools gpg rsyslog
+
+echo "🧹 Removing unnecessary packages..."
 execute apt-get -y autoremove
 
 echo "🐍 Removing Python EXTERNALLY-MANAGED blocks..."
@@ -36,15 +44,6 @@ execute rm -rf /usr/lib/python3.*/EXTERNALLY-MANAGED
 
 echo "🛑 Disabling networkd wait service..."
 execute systemctl disable -q --now systemd-networkd-wait-online.service
-
-echo "📦 Updating package lists..."
-execute apt-get update
-
-echo "⬆️  Upgrading packages..."
-execute apt-get -o Dpkg::Options::="--force-confold" -y dist-upgrade
-
-echo "🛠️  Installing essential packages..."
-execute apt-get install -y neovim htop curl wget net-tools gpg
 
 echo "⏰ Setting timezone to host timezone..."
 HOST_TZ=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || echo "UTC")
