@@ -50,6 +50,9 @@ pct exec $CTID -- systemctl restart rsyslog
 echo "🎨 Setting 256-color terminal..."
 pct exec $CTID -- bash -c 'grep -qxF "export TERM=\"xterm-256color\"" /root/.bashrc || echo "export TERM=\"xterm-256color\"" >> /root/.bashrc'
 
+echo "🧹 Removing '[ -z \"$PS1\" ] && return' from /root/.bashrc if present..."
+pct exec $CTID -- sed -i '/\[ -z \"\$PS1\" \] && return/d' /root/.bashrc
+
 echo "🙈 Disabling default MOTD scripts..."
 pct exec $CTID -- bash -c 'if [ -d /etc/update-motd.d/ ] && [ "$(ls -A /etc/update-motd.d/)" ]; then chmod -x /etc/update-motd.d/*; fi'
 
