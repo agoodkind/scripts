@@ -62,8 +62,8 @@ execute systemctl restart rsyslog
 echo "🎨 Setting 256-color terminal..."
 execute bash -c 'grep -qxF "export TERM=\"xterm-256color\"" /root/.bashrc || echo "export TERM=\"xterm-256color\"" >> /root/.bashrc'
 
-echo "🧹 Removing '[ -z \"$PS1\" ] && return' from /root/.bashrc if present..."
-execute sed -i '/\[ -z \"\$PS1\" \] && return/d' /root/.bashrc
+echo "🧹 Removing '[ -z \"\$PS1\" ] && return' from /root/.bashrc if present..."
+execute bash -c 'sed -i "/\[ -z \"\$PS1\" \] && return/d" /root/.bashrc'
 
 echo "🙈 Disabling default MOTD scripts..."
 execute bash -c 'if [ -d /etc/update-motd.d/ ] && [ "$(ls -A /etc/update-motd.d/)" ]; then chmod -x /etc/update-motd.d/*; fi'
