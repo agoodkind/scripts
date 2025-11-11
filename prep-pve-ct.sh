@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-CTID="${1}"
+CTID="${1:-}"
 
 if [ -z "$CTID" ]; then
     echo "Usage: ${0} CTID"
@@ -10,7 +10,6 @@ if [ -z "$CTID" ]; then
 fi
 
 function execute() {
-    echo "Executing: $*"
     pct exec "$CTID" -- "$@"
 }
 
