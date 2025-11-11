@@ -17,11 +17,19 @@ function execute() {
 echo "🚀 Preparing container $CTID..."
 
 execute apt-get update
+
+echo "🌐 Generating and setting en_US.UTF-8 locale..."
+execute apt-get install -y locales
+execute sed -i "s/^# *en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen
+execute locale-gen
+execute update-locale LANG=en_US.UTF-8
+execute bash -c "grep -qxF 'export LANG=\"en_US.UTF-8\"' /root/.bashrc || echo 'export LANG=\"en_US.UTF-8\"' >> /root/.bashrc"
+execute bash -c "grep -qxF 'export LC_ALL=\"en_US.UTF-8\"' /root/.bashrc || echo 'export LC_ALL=\"en_US.UTF-8\"' >> /root/.bashrc"
+
 execute apt-get -y upgrade
 execute apt-get -y dist-upgrade
-execute apt-get -y install locales neovim htop curl wget net-tools gpg timedatectl rsyslog agetty
+execute apt-get -y install neovim htop curl wget net-tools gpg rsyslog
 execute apt-get -y autoremove
-
 
 echo "🐍 Removing Python EXTERNALLY-MANAGED blocks..."
 execute rm -rf /usr/lib/python3.*/EXTERNALLY-MANAGED
@@ -34,14 +42,6 @@ execute apt-get update
 
 echo "⬆️  Upgrading packages..."
 execute apt-get -o Dpkg::Options::="--force-confold" -y dist-upgrade
-
-echo "🌐 Generating and setting en_US.UTF-8 locale..."
-execute apt-get install -y locales
-execute sed -i "s/^# *en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen
-execute locale-gen
-execute update-locale LANG=en_US.UTF-8
-execute bash -c "grep -qxF 'export LANG=\"en_US.UTF-8\"' /root/.bashrc || echo 'export LANG=\"en_US.UTF-8\"' >> /root/.bashrc"
-execute bash -c "grep -qxF 'export LC_ALL=\"en_US.UTF-8\"' /root/.bashrc || echo 'export LC_ALL=\"en_US.UTF-8\"' >> /root/.bashrc"
 
 echo "🛠️  Installing essential packages..."
 execute apt-get install -y neovim htop curl wget net-tools gpg
