@@ -1,5 +1,5 @@
-
 #!/usr/bin/env bash
+
 #
 # cf-lb-sync.sh
 #
@@ -32,7 +32,16 @@ SOURCE_RECORD="lb-home.goodkind.io"      # Cloudflare source
 TARGET_RECORD="home.goodkind.io"         # BIND target
 LOGSTASH_HOST="logstash.home.goodkind.io"
 LOGSTASH_PORT=5044
-TSIG_KEY="/etc/bind/keys/dhcp-update.key"
+# Dedicated TSIG key for cf-lb-sync updates.
+# In BIND, define something like:
+#   key "cf-lb-sync" {
+#       algorithm hmac-sha256;
+#       secret "BASE64_SECRET";
+#   };
+#   update-policy {
+#       grant cf-lb-sync name home.goodkind.io A AAAA;
+#   };
+TSIG_KEY="/etc/bind/keys/cf-lb-sync.key"
 
 # Graceful shutdown handler
 cleanup() {
