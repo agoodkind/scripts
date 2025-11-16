@@ -9,7 +9,7 @@ if [ -z "$CTID" ]; then
     exit 1
 fi
 
-function execute() {
+execute() {
     pct exec "$CTID" -- "$@"
 }
 
