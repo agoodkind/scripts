@@ -34,7 +34,8 @@ send_email() {
     
     if [ -f "$SEND_EMAIL_SCRIPT" ] && [ -x "$SEND_EMAIL_SCRIPT" ]; then
         "$SEND_EMAIL_SCRIPT" -t "$EMAIL_RECIPIENT" -s "$subject" \
-            -m "$message" -n "WAN Monitor" 2>&1 | tee -a "$LOG"
+            -m "$message" -n "WAN Monitor" -c "wan-monitor.sh" \
+            2>&1 | tee -a "$LOG"
     else
         log "Warning: send-email script not found at \
 $SEND_EMAIL_SCRIPT. Email not sent."
@@ -162,7 +163,7 @@ adjust_routes() {
         log "Switched to backup WAN ($BACKUP_IF)"
         
         if [ "$current_state" != "backup" ]; then
-            local dry_run_msg=""
+            dry_run_msg=""
             [ "$DRY_RUN" = true ] && \
                 dry_run_msg="\n\n[DRY RUN - No routes were actually \
 changed]"
@@ -196,7 +197,7 @@ $(date)${dry_run_msg}"
         log "Switched back to primary WAN ($PRIMARY_IF)"
         
         if [ "$current_state" != "primary" ]; then
-            local dry_run_msg=""
+            dry_run_msg=""
             [ "$DRY_RUN" = true ] && \
                 dry_run_msg="\n\n[DRY RUN - No routes were actually \
 changed]"
@@ -253,7 +254,7 @@ else
     else
         log "Both WAN interfaces appear to be down"
         if [ "$CURRENT_STATE" != "down" ]; then
-            local dry_run_msg=""
+            dry_run_msg=""
             [ "$DRY_RUN" = true ] && \
                 dry_run_msg="\n\n[DRY RUN - No routes were actually \
 changed]"
