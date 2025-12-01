@@ -24,7 +24,8 @@ infer_caller() {
         if [[ "$caller_name" =~ ^(bash|sh)$ ]]; then
             # Try to get script name from parent's command line
             caller_name=$(ps -p "$ppid" -o args= 2>/dev/null | \
-                awk '{for(i=1;i<=NF;i++){if($i!~/^-/ && $i~/\.(sh|bash)$/){print $i;exit}}if($NF!~/^-/){print $NF}}' | \
+                awk '{for(i=1;i<=NF;i++){if($i!~/^-/ && \
+$i~/\.(sh|bash)$/){print $i;exit}}if($NF!~/^-/){print $NF}}' | \
                 xargs basename 2>/dev/null || echo "$caller_name")
         fi
     fi
@@ -39,11 +40,6 @@ infer_caller() {
     
     echo "$caller_name"
 }
-
-# Auto-detect caller if not provided
-if [ -z "$CALLER_INFO" ]; then
-    CALLER_INFO=$(infer_caller)
-fi
 
 # Function to display usage
 show_usage() {
@@ -110,6 +106,11 @@ if [[ ! "$RECIPIENT" =~ \
     ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
     echo "Error: Invalid email address format"
     exit 1
+fi
+
+# Auto-detect caller if not explicitly provided
+if [ -z "$CALLER_INFO" ]; then
+    CALLER_INFO=$(infer_caller)
 fi
 
 # Get system information
