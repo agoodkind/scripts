@@ -126,19 +126,51 @@ get_sys_info() {
         awk '/^Mem:/ {print $3}' || echo "N/A")
     local disk_usage=$(df -h / 2>/dev/null | \
         awk 'NR==2 {print $5}' || echo "N/A")
-    local ipv4=$(ip -4 addr show 2>/dev/null | \
-        grep -oP 'inet \K[^/]+' | head -1 || echo "N/A")
-    local ipv6=$(ip -6 addr show 2>/dev/null | \
-        grep -oP 'inet6 \K[^/]+' | grep -v '^::1$' | \
-        grep -v '^fe80' | head -1 || echo "N/A")
+    
+    # Get ALL IP addresses for ALL interfaces
+    local ipv4_list=""
+    local ipv6_list=""
+    local current_iface=""
+    
+    # Parse ip addr show output
+    while IFS= read -r line; do
+        # Check if this is an interface line
+        if [[ "$line" =~ ^[0-9]+:[[:space:]]+([^:]+) ]]; then
+            current_iface="${BASH_REMATCH[1]}"
+            current_iface="${current_iface%:}"
+        # Check for IPv4 address
+        elif [[ "$line" =~ inet[[:space:]]+([0-9.]+)/ ]]; then
+            local ip="${BASH_REMATCH[1]}"
+            if [ "$ip" != "127.0.0.1" ]; then
+                if [ -n "$ipv4_list" ]; then
+                    ipv4_list="${ipv4_list}, ${current_iface}:${ip}"
+                else
+                    ipv4_list="${current_iface}:${ip}"
+                fi
+            fi
+        # Check for IPv6 address (skip loopback and link-local)
+        elif [[ "$line" =~ inet6[[:space:]]+([0-9a-fA-F:]+)/ ]]; then
+            local ip="${BASH_REMATCH[1]}"
+            if [[ "$ip" != "::1" && "$ip" != fe80* ]]; then
+                if [ -n "$ipv6_list" ]; then
+                    ipv6_list="${ipv6_list}, ${current_iface}:${ip}"
+                else
+                    ipv6_list="${current_iface}:${ip}"
+                fi
+            fi
+        fi
+    done < <(ip addr show 2>/dev/null)
+    
+    [ -z "$ipv4_list" ] && ipv4_list="N/A"
+    [ -z "$ipv6_list" ] && ipv6_list="N/A"
     
     echo "hostname|$hostname"
     echo "uptime|$uptime"
     echo "load|$load"
     echo "memory|${mem_used}/${mem_total}"
     echo "disk_usage|$disk_usage"
-    echo "ipv4|$ipv4"
-    echo "ipv6|$ipv6"
+    echo "ipv4|$ipv4_list"
+    echo "ipv6|$ipv6_list"
 }
 
 # Create decorated table
@@ -147,44 +179,68 @@ create_table() {
     shift
     local items=("$@")
     
-    local max_key_len=0
-    local max_val_len=0
+    # Fixed column widths for consistent tables
+    local key_width=12
+    local val_width=50
     
-    # Find max lengths
-    for item in "${items[@]}"; do
-        local key=$(echo "$item" | cut -d'|' -f1)
-        local val=$(echo "$item" | cut -d'|' -f2-)
-        [ ${#key} -gt "$max_key_len" ] && max_key_len=${#key}
-        [ ${#val} -gt "$max_val_len" ] && max_val_len=${#val}
+    # Build top border
+    local top_border="┌"
+    local i=0
+    while [ $i -lt $((key_width + 3)) ]; do
+        top_border="${top_border}─"
+        i=$((i + 1))
     done
+    top_border="${top_border}┬"
+    i=0
+    while [ $i -lt $((val_width + 3)) ]; do
+        top_border="${top_border}─"
+        i=$((i + 1))
+    done
+    top_border="${top_border}┐"
+    echo "$top_border"
     
-    # Standardize column widths for consistent table appearance
-    # Use fixed widths: 12 for keys, 35 for values (total < 90 cols)
-    max_key_len=12
-    max_val_len=35
+    # Title row
+    printf "│ %-*s │ %-*s │\n" "$key_width" "$title" "$val_width" ""
     
-    # Header with proper table borders
-    echo "┌$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┬$(printf \
-'─%.0s' $(seq 1 $((max_val_len + 3))))┐"
-    printf "│ %-*s │ %-*s │\n" "$max_key_len" "$title" "$max_val_len" ""
-    echo "├$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┼$(printf \
-'─%.0s' $(seq 1 $((max_val_len + 3))))┤"
+    # Middle border
+    local mid_border="├"
+    i=0
+    while [ $i -lt $((key_width + 3)) ]; do
+        mid_border="${mid_border}─"
+        i=$((i + 1))
+    done
+    mid_border="${mid_border}┼"
+    i=0
+    while [ $i -lt $((val_width + 3)) ]; do
+        mid_border="${mid_border}─"
+        i=$((i + 1))
+    done
+    mid_border="${mid_border}┤"
+    echo "$mid_border"
     
-    # Rows - ensure consistent spacing
+    # Data rows
     for item in "${items[@]}"; do
         local key=$(echo "$item" | cut -d'|' -f1)
         local val=$(echo "$item" | cut -d'|' -f2-)
-        # Truncate values if too long
-        if [ ${#val} -gt "$max_val_len" ]; then
-            val="${val:0:$((max_val_len-3))}..."
-        fi
-        printf "│ %-*s │ %-*s │\n" "$max_key_len" "$key" "$max_val_len" \
+        printf "│ %-*s │ %-*s │\n" "$key_width" "$key" "$val_width" \
             "$val"
     done
     
-    # Footer
-    echo "└$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┴$(printf \
-'─%.0s' $(seq 1 $((max_val_len + 3))))┘"
+    # Bottom border
+    local bot_border="└"
+    i=0
+    while [ $i -lt $((key_width + 3)) ]; do
+        bot_border="${bot_border}─"
+        i=$((i + 1))
+    done
+    bot_border="${bot_border}┴"
+    i=0
+    while [ $i -lt $((val_width + 3)) ]; do
+        bot_border="${bot_border}─"
+        i=$((i + 1))
+    done
+    bot_border="${bot_border}┘"
+    echo "$bot_border"
 }
 
 # Build email body with tables
