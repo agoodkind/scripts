@@ -4,6 +4,21 @@
 # This script checks connectivity and automatically switches routes when
 # the primary WAN fails
 
+PRIMARY_IF="vmbr0"
+BACKUP_IF="enp4s0"
+PRIMARY_GW4="10.250.0.1"
+PRIMARY_GW6="3d06:bad:b01::1"
+TEST_HOST4="8.8.8.8"
+TEST_HOST6="2001:4860:4860::8888"
+LOG="/var/log/wan-monitor.log"
+STATE_FILE="/var/run/wan-monitor.state"
+EMAIL_RECIPIENT="alex@goodkind.io"
+SEND_EMAIL_SCRIPT="/opt/scripts/send-email"
+
+log() {
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" | tee -a "$LOG"
+}
+
 show_usage() {
     cat << EOF
 Usage: $0 [OPTIONS]
@@ -12,8 +27,10 @@ Monitor primary WAN interface and automatically failover to backup when
 needed. Checks IPv6 connectivity first (priority), then IPv4.
 
 OPTIONS:
-    --dry-run, -d    Run in dry-run mode (no route changes, sends emails)
-    --test-email, -t Send a test email (works with or without --dry-run)
+    --dry-run, -d    Run in dry-run mode (no route changes, sends \
+emails)
+    --test-email, -t Send a test email (works with or without \
+--dry-run)
     --help, -h       Show this help message
 
 EXAMPLES:
@@ -31,19 +48,33 @@ CONFIGURATION:
 EOF
 }
 
-PRIMARY_IF="vmbr0"
-BACKUP_IF="enp4s0"
-PRIMARY_GW4="10.250.0.1"
-PRIMARY_GW6="3d06:bad:b01::1"
-TEST_HOST4="8.8.8.8"
-TEST_HOST6="2001:4860:4860::8888"
-LOG="/var/log/wan-monitor.log"
-STATE_FILE="/var/run/wan-monitor.state"
-EMAIL_RECIPIENT="alex@goodkind.io"
-SEND_EMAIL_SCRIPT="/opt/scripts/send-email"
+show_usage() {
+    cat << EOF
+Usage: $0 [OPTIONS]
 
-log() {
-    echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" | tee -a "$LOG"
+Monitor primary WAN interface and automatically failover to backup when
+needed. Checks IPv6 connectivity first (priority), then IPv4.
+
+OPTIONS:
+    --dry-run, -d    Run in dry-run mode (no route changes, sends \
+emails)
+    --test-email, -t Send a test email (works with or without \
+--dry-run)
+    --help, -h       Show this help message
+
+EXAMPLES:
+    $0                    # Normal operation
+    $0 --dry-run          # Test mode, no route changes
+    $0 --test-email       # Send test email
+    $0 --dry-run -t       # Dry-run with test email
+
+CONFIGURATION:
+    Primary WAN:   $PRIMARY_IF ($PRIMARY_GW4 / $PRIMARY_GW6)
+    Backup WAN:   $BACKUP_IF
+    Log file:     $LOG
+    State file:   $STATE_FILE
+    Email:        $EMAIL_RECIPIENT
+EOF
 }
 
 # Parse arguments
@@ -56,6 +87,7 @@ for arg in "$@"; do
             DRY_RUN=true
             log "=== DRY RUN MODE: No routes will be changed, but \
 emails will be sent ==="
+			SEND_TEST_EMAIL=true
             ;;
         --test-email|-t)
             SEND_TEST_EMAIL=true
