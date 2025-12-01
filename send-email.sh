@@ -159,14 +159,16 @@ create_table() {
     done
     
     # Standardize column widths for consistent table appearance
-    # Use fixed widths: 14 for keys, 40 for values
-    max_key_len=14
-    max_val_len=40
+    # Use fixed widths: 12 for keys, 35 for values (total < 90 cols)
+    max_key_len=12
+    max_val_len=35
     
     # Header with proper table borders
-    echo "┌$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┬$(printf '─%.0s' $(seq 1 $((max_val_len + 3))))┐"
+    echo "┌$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┬$(printf \
+'─%.0s' $(seq 1 $((max_val_len + 3))))┐"
     printf "│ %-*s │ %-*s │\n" "$max_key_len" "$title" "$max_val_len" ""
-    echo "├$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┼$(printf '─%.0s' $(seq 1 $((max_val_len + 3))))┤"
+    echo "├$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┼$(printf \
+'─%.0s' $(seq 1 $((max_val_len + 3))))┤"
     
     # Rows - ensure consistent spacing
     for item in "${items[@]}"; do
@@ -181,7 +183,8 @@ create_table() {
     done
     
     # Footer
-    echo "└$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┴$(printf '─%.0s' $(seq 1 $((max_val_len + 3))))┘"
+    echo "└$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┴$(printf \
+'─%.0s' $(seq 1 $((max_val_len + 3))))┘"
 }
 
 # Build email body with tables
