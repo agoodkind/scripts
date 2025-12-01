@@ -198,6 +198,12 @@ create_table() {
 build_email_body() {
     local body=""
     
+    # Original message first
+    body+="Message:\n"
+    body+="$(printf '─%.0s' $(seq 1 50))\n"
+    body+="$MESSAGE"
+    body+="\n\n"
+    
     # Caller information table
     if [ -n "$CALLER_INFO" ]; then
         local caller_items=(
@@ -219,12 +225,6 @@ build_email_body() {
     done <<< "$sys_info"
     
     body+="$(create_table "System Information" "${sys_items[@]}")"
-    body+="\n\n"
-    
-    # Original message
-    body+="Message:\n"
-    body+="$(printf '─%.0s' $(seq 1 50))\n"
-    body+="$MESSAGE"
     
     echo -e "$body"
 }
