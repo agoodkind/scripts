@@ -48,35 +48,6 @@ CONFIGURATION:
 EOF
 }
 
-show_usage() {
-    cat << EOF
-Usage: $0 [OPTIONS]
-
-Monitor primary WAN interface and automatically failover to backup when
-needed. Checks IPv6 connectivity first (priority), then IPv4.
-
-OPTIONS:
-    --dry-run, -d    Run in dry-run mode (no route changes, sends \
-emails)
-    --test-email, -t Send a test email (works with or without \
---dry-run)
-    --help, -h       Show this help message
-
-EXAMPLES:
-    $0                    # Normal operation
-    $0 --dry-run          # Test mode, no route changes
-    $0 --test-email       # Send test email
-    $0 --dry-run -t       # Dry-run with test email
-
-CONFIGURATION:
-    Primary WAN:   $PRIMARY_IF ($PRIMARY_GW4 / $PRIMARY_GW6)
-    Backup WAN:   $BACKUP_IF
-    Log file:     $LOG
-    State file:   $STATE_FILE
-    Email:        $EMAIL_RECIPIENT
-EOF
-}
-
 # Parse arguments
 DRY_RUN=false
 SEND_TEST_EMAIL=false
