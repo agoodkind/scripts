@@ -158,40 +158,30 @@ create_table() {
         [ ${#val} -gt "$max_val_len" ] && max_val_len=${#val}
     done
     
-    # Ensure minimum widths for readability
-    [ "$max_key_len" -lt 12 ] && max_key_len=12
-    [ "$max_val_len" -lt 20 ] && max_val_len=20
+    # Standardize column widths for consistent table appearance
+    # Use fixed widths: 14 for keys, 40 for values
+    max_key_len=14
+    max_val_len=40
     
-    # Limit column widths
-    [ "$max_key_len" -gt 20 ] && max_key_len=20
-    [ "$max_val_len" -gt 55 ] && max_val_len=55
-    
-    # Calculate total width: key + spaces + separator + val + borders
-    # Format: │ key │ val │
-    #         │ (max_key_len) │ (max_val_len) │
-    # Total: 1 + 1 + max_key_len + 1 + 1 + 1 + max_val_len + 1 + 1
-    #        = max_key_len + max_val_len + 7
-    local width=$((max_key_len + max_val_len + 7))
-    [ $width -lt 50 ] && width=50
-    [ $width -gt 88 ] && width=88
-    
-    # Header
-    echo "┌$(printf '─%.0s' $(seq 1 $((width-2))))┐"
-    printf "│ %-*s │\n" $((width-4)) "$title"
-    echo "├$(printf '─%.0s' $(seq 1 $((width-2))))┤"
+    # Header with proper table borders
+    echo "┌$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┬$(printf '─%.0s' $(seq 1 $((max_val_len + 3))))┐"
+    printf "│ %-*s │ %-*s │\n" "$max_key_len" "$title" "$max_val_len" ""
+    echo "├$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┼$(printf '─%.0s' $(seq 1 $((max_val_len + 3))))┤"
     
     # Rows - ensure consistent spacing
     for item in "${items[@]}"; do
         local key=$(echo "$item" | cut -d'|' -f1)
         local val=$(echo "$item" | cut -d'|' -f2-)
-        # Format: │ key │ val │
-        # Use fixed widths for alignment
+        # Truncate values if too long
+        if [ ${#val} -gt "$max_val_len" ]; then
+            val="${val:0:$((max_val_len-3))}..."
+        fi
         printf "│ %-*s │ %-*s │\n" "$max_key_len" "$key" "$max_val_len" \
             "$val"
     done
     
     # Footer
-    echo "└$(printf '─%.0s' $(seq 1 $((width-2))))┘"
+    echo "└$(printf '─%.0s' $(seq 1 $((max_key_len + 3))))┴$(printf '─%.0s' $(seq 1 $((max_val_len + 3))))┘"
 }
 
 # Build email body with tables
@@ -199,10 +189,8 @@ build_email_body() {
     local body=""
     
     # Original message first
-
     body+="$MESSAGE"
-    body+="\n"
-    body+="$(printf '─%.0s' $(seq 1 50))\n\n"
+    body+="\n\n"
 
     # Caller information table
     if [ -n "$CALLER_INFO" ]; then
