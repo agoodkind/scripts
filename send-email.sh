@@ -128,41 +128,57 @@ get_sys_info() {
         awk 'NR==2 {print $5}' || echo "N/A")
     
     # Get ALL IP addresses for ALL interfaces
-    local ipv4_list=""
-    local ipv6_list=""
-    local current_iface=""
+    local ipv4_entries=()
+    local ipv6_entries=()
     
-    # Parse ip addr show output
-    while IFS= read -r line; do
-        # Check if this is an interface line
-        if [[ "$line" =~ ^[0-9]+:[[:space:]]+([^:]+) ]]; then
-            current_iface="${BASH_REMATCH[1]}"
-            current_iface="${current_iface%:}"
-        # Check for IPv4 address
-        elif [[ "$line" =~ inet[[:space:]]+([0-9.]+)/ ]]; then
-            local ip="${BASH_REMATCH[1]}"
+    # Parse ip addr show output using awk - filter out loopback/link-local
+    while IFS= read -r entry; do
+        local iface=$(echo "$entry" | cut -d':' -f1)
+        local ip=$(echo "$entry" | cut -d':' -f2- | cut -d'/' -f1)
+        
+        # Determine if IPv4 or IPv6 and filter
+        if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # Skip loopback IPv4
             if [ "$ip" != "127.0.0.1" ]; then
-                if [ -n "$ipv4_list" ]; then
-                    ipv4_list="${ipv4_list}, ${current_iface}:${ip}"
-                else
-                    ipv4_list="${current_iface}:${ip}"
-                fi
+                ipv4_entries+=("${iface}:${ip}")
             fi
-        # Check for IPv6 address (skip loopback and link-local)
-        elif [[ "$line" =~ inet6[[:space:]]+([0-9a-fA-F:]+)/ ]]; then
-            local ip="${BASH_REMATCH[1]}"
+        elif [[ "$ip" =~ : ]]; then
+            # Skip loopback and link-local IPv6
             if [[ "$ip" != "::1" && "$ip" != fe80* ]]; then
-                if [ -n "$ipv6_list" ]; then
-                    ipv6_list="${ipv6_list}, ${current_iface}:${ip}"
-                else
-                    ipv6_list="${current_iface}:${ip}"
-                fi
+                ipv6_entries+=("${iface}:${ip}")
             fi
         fi
-    done < <(ip addr show 2>/dev/null)
+    done < <(ip -o addr show 2>/dev/null | awk '{for(i=1;i<=NF;i++) \
+{if($i=="inet" || $i=="inet6") {iface=$2; ip=$(i+1); \
+gsub(/\/.*/, "", ip); print iface":"ip; break}}}' | \
+        grep -v "^lo:" | grep -v "fe80:")
     
-    [ -z "$ipv4_list" ] && ipv4_list="N/A"
-    [ -z "$ipv6_list" ] && ipv6_list="N/A"
+    # Format IP lists with line breaks for readability
+    local ipv4_list=""
+    if [ ${#ipv4_entries[@]} -eq 0 ]; then
+        ipv4_list="N/A"
+    else
+        for entry in "${ipv4_entries[@]}"; do
+            if [ -z "$ipv4_list" ]; then
+                ipv4_list="$entry"
+            else
+                ipv4_list="${ipv4_list}\n                    ${entry}"
+            fi
+        done
+    fi
+    
+    local ipv6_list=""
+    if [ ${#ipv6_entries[@]} -eq 0 ]; then
+        ipv6_list="N/A"
+    else
+        for entry in "${ipv6_entries[@]}"; do
+            if [ -z "$ipv6_list" ]; then
+                ipv6_list="$entry"
+            else
+                ipv6_list="${ipv6_list}\n                    ${entry}"
+            fi
+        done
+    fi
     
     echo "hostname|$hostname"
     echo "uptime|$uptime"
@@ -173,74 +189,46 @@ get_sys_info() {
     echo "ipv6|$ipv6_list"
 }
 
-# Create decorated table
+# Create formatted table (plain text, aligned columns)
 create_table() {
     local title="$1"
     shift
     local items=("$@")
     
-    # Fixed column widths for consistent tables
-    local key_width=12
-    local val_width=50
-    
-    # Build top border
-    local top_border="┌"
-    local i=0
-    while [ $i -lt $((key_width + 3)) ]; do
-        top_border="${top_border}─"
-        i=$((i + 1))
+    # Find max key length for alignment
+    local max_key_len=0
+    for item in "${items[@]}"; do
+        local key=$(echo "$item" | cut -d'|' -f1)
+        [ ${#key} -gt "$max_key_len" ] && max_key_len=${#key}
     done
-    top_border="${top_border}┬"
-    i=0
-    while [ $i -lt $((val_width + 3)) ]; do
-        top_border="${top_border}─"
-        i=$((i + 1))
-    done
-    top_border="${top_border}┐"
-    echo "$top_border"
+    [ "$max_key_len" -lt 12 ] && max_key_len=12
+    [ "$max_key_len" -gt 20 ] && max_key_len=20
     
-    # Title row
-    printf "│ %-*s │ %-*s │\n" "$key_width" "$title" "$val_width" ""
+    # Title
+    echo "$title"
+    echo "$(printf '=%.0s' $(seq 1 ${#title}))"
+    echo ""
     
-    # Middle border
-    local mid_border="├"
-    i=0
-    while [ $i -lt $((key_width + 3)) ]; do
-        mid_border="${mid_border}─"
-        i=$((i + 1))
-    done
-    mid_border="${mid_border}┼"
-    i=0
-    while [ $i -lt $((val_width + 3)) ]; do
-        mid_border="${mid_border}─"
-        i=$((i + 1))
-    done
-    mid_border="${mid_border}┤"
-    echo "$mid_border"
-    
-    # Data rows
+    # Table rows with aligned columns
     for item in "${items[@]}"; do
         local key=$(echo "$item" | cut -d'|' -f1)
         local val=$(echo "$item" | cut -d'|' -f2-)
-        printf "│ %-*s │ %-*s │\n" "$key_width" "$key" "$val_width" \
-            "$val"
+        
+        # Handle multi-line values (like IP addresses)
+        if [[ "$val" =~ \\n ]]; then
+            # First line
+            local first_line=$(echo -e "$val" | head -1)
+            printf "%-*s  %s\n" "$max_key_len" "$key" "$first_line"
+            # Subsequent lines (indented to align with value column)
+            while IFS= read -r line; do
+                [ -n "$line" ] && printf "%-*s  %s\n" "$max_key_len" "" \
+                    "$line"
+            done < <(echo -e "$val" | tail -n +2)
+        else
+            printf "%-*s  %s\n" "$max_key_len" "$key" "$val"
+        fi
     done
-    
-    # Bottom border
-    local bot_border="└"
-    i=0
-    while [ $i -lt $((key_width + 3)) ]; do
-        bot_border="${bot_border}─"
-        i=$((i + 1))
-    done
-    bot_border="${bot_border}┴"
-    i=0
-    while [ $i -lt $((val_width + 3)) ]; do
-        bot_border="${bot_border}─"
-        i=$((i + 1))
-    done
-    bot_border="${bot_border}┘"
-    echo "$bot_border"
+    echo ""
 }
 
 # Build email body with tables
