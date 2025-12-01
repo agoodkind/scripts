@@ -34,8 +34,7 @@ send_email() {
     
     if [ -f "$SEND_EMAIL_SCRIPT" ] && [ -x "$SEND_EMAIL_SCRIPT" ]; then
         "$SEND_EMAIL_SCRIPT" -t "$EMAIL_RECIPIENT" -s "$subject" \
-            -m "$message" -n "WAN Monitor" -c "wan-monitor.sh" \
-            2>&1 | tee -a "$LOG"
+            -m "$message" -n "WAN Monitor" 2>&1 | tee -a "$LOG"
     else
         log "Warning: send-email script not found at \
 $SEND_EMAIL_SCRIPT. Email not sent."
