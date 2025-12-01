@@ -199,11 +199,11 @@ build_email_body() {
     local body=""
     
     # Original message first
-    body+="Message:\n"
-    body+="$(printf '─%.0s' $(seq 1 50))\n"
+
     body+="$MESSAGE"
-    body+="\n\n"
-    
+    body+="\n"
+    body+="$(printf '─%.0s' $(seq 1 50))\n\n"
+
     # Caller information table
     if [ -n "$CALLER_INFO" ]; then
         local caller_items=(
