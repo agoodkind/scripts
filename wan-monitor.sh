@@ -3,7 +3,33 @@
 # Monitor primary WAN (vmbr0) and failover to backup (enp4s0) if needed
 # This script checks connectivity and automatically switches routes when
 # the primary WAN fails
-# Usage: wan-monitor.sh [--dry-run]
+
+show_usage() {
+    cat << EOF
+Usage: $0 [OPTIONS]
+
+Monitor primary WAN interface and automatically failover to backup when
+needed. Checks IPv6 connectivity first (priority), then IPv4.
+
+OPTIONS:
+    --dry-run, -d    Run in dry-run mode (no route changes, sends emails)
+    --test-email, -t Send a test email (works with or without --dry-run)
+    --help, -h       Show this help message
+
+EXAMPLES:
+    $0                    # Normal operation
+    $0 --dry-run          # Test mode, no route changes
+    $0 --test-email       # Send test email
+    $0 --dry-run -t       # Dry-run with test email
+
+CONFIGURATION:
+    Primary WAN:   $PRIMARY_IF ($PRIMARY_GW4 / $PRIMARY_GW6)
+    Backup WAN:   $BACKUP_IF
+    Log file:     $LOG
+    State file:   $STATE_FILE
+    Email:        $EMAIL_RECIPIENT
+EOF
+}
 
 PRIMARY_IF="vmbr0"
 BACKUP_IF="enp4s0"
@@ -22,11 +48,29 @@ log() {
 
 # Parse arguments
 DRY_RUN=false
-if [[ "$*" =~ --dry-run ]] || [[ "$*" =~ -d ]]; then
-    DRY_RUN=true
-    log "=== DRY RUN MODE: No routes will be changed, but emails \
-will be sent ==="
-fi
+SEND_TEST_EMAIL=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run|-d)
+            DRY_RUN=true
+            log "=== DRY RUN MODE: No routes will be changed, but \
+emails will be sent ==="
+            ;;
+        --test-email|-t)
+            SEND_TEST_EMAIL=true
+            ;;
+        --help|-h)
+            show_usage
+            exit 0
+            ;;
+        *)
+            echo "Error: Unknown option '$arg'"
+            show_usage
+            exit 1
+            ;;
+    esac
+done
 
 send_email() {
     local subject="$1"
@@ -265,6 +309,20 @@ and IPv4).\nTime: $(date)${dry_run_msg}"
                 set_state "down"
             fi
         fi
+    fi
+fi
+
+# Send test email in dry-run mode if requested
+if [ "$SEND_TEST_EMAIL" = true ] || [ "$DRY_RUN" = true ]; then
+    if [ "$SEND_TEST_EMAIL" = true ] || \
+        { [ "$CURRENT_STATE" = "primary" ] && \
+        [ "$DRY_RUN" = true ]; }; then
+        log "Sending test email..."
+        send_email "WAN Monitor Test Email" \
+            "This is a test email from the WAN monitor script.\n\n\
+Current State: $CURRENT_STATE\nPrimary WAN: $PRIMARY_IF\nBackup WAN: \
+$BACKUP_IF\nTime: $(date)\n\n[This is a test - no actual changes \
+were made]"
     fi
 fi
 
