@@ -11,6 +11,40 @@ SUBJECT=""
 MESSAGE=""
 CALLER_INFO=""
 
+# Infer caller information automatically
+infer_caller() {
+    # Try to get caller from parent process
+    local ppid=$PPID
+    local caller_name=""
+    
+    # Get parent process command
+    if command -v ps >/dev/null 2>&1; then
+        caller_name=$(ps -p "$ppid" -o comm= 2>/dev/null | head -1)
+        # If it's bash/sh, try to get the actual script name
+        if [[ "$caller_name" =~ ^(bash|sh)$ ]]; then
+            # Try to get script name from parent's command line
+            caller_name=$(ps -p "$ppid" -o args= 2>/dev/null | \
+                awk '{for(i=1;i<=NF;i++){if($i!~/^-/ && $i~/\.(sh|bash)$/){print $i;exit}}if($NF!~/^-/){print $NF}}' | \
+                xargs basename 2>/dev/null || echo "$caller_name")
+        fi
+    fi
+    
+    # Fallback: try to get from BASH_SOURCE if available
+    if [ -z "$caller_name" ] && [ -n "${BASH_SOURCE[1]}" ]; then
+        caller_name=$(basename "${BASH_SOURCE[1]}" 2>/dev/null)
+    fi
+    
+    # Final fallback
+    [ -z "$caller_name" ] && caller_name="unknown"
+    
+    echo "$caller_name"
+}
+
+# Auto-detect caller if not provided
+if [ -z "$CALLER_INFO" ]; then
+    CALLER_INFO=$(infer_caller)
+fi
+
 # Function to display usage
 show_usage() {
     echo "Usage: $0 -t <recipient> -s <subject> -m <message> \
