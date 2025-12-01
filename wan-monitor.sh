@@ -12,28 +12,7 @@ TEST_HOST6="2001:4860:4860::8888"
 LOG="/var/log/wan-monitor.log"
 STATE_FILE="/var/run/wan-monitor.state"
 EMAIL_RECIPIENT="alex@goodkind.io"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Try to find send-email.sh in common locations
-find_send_email() {
-    local possible_paths=(
-        "${SCRIPT_DIR}/send-email.sh"
-        "/usr/local/bin/send-email.sh"
-        "/root/.dotfiles/lib/scripts/send-email.sh"
-        "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/send-email.sh"
-    )
-    
-    for path in "${possible_paths[@]}"; do
-        if [ -f "$path" ] && [ -x "$path" ]; then
-            echo "$path"
-            return 0
-        fi
-    done
-    
-    return 1
-}
-
-SEND_EMAIL_SCRIPT=$(find_send_email)
+SEND_EMAIL_SCRIPT="/opt/scripts/send-email"
 
 log() {
     echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" | tee -a "$LOG"
@@ -43,10 +22,10 @@ send_email() {
     local subject="$1"
     local message="$2"
     
-    if [ -n "$SEND_EMAIL_SCRIPT" ] && [ -f "$SEND_EMAIL_SCRIPT" ]; then
+    if [ -f "$SEND_EMAIL_SCRIPT" ] && [ -x "$SEND_EMAIL_SCRIPT" ]; then
         "$SEND_EMAIL_SCRIPT" -t "$EMAIL_RECIPIENT" -s "$subject" -m "$message" -n "WAN Monitor" 2>&1 | tee -a "$LOG"
     else
-        log "Warning: send-email script not found. Email not sent."
+        log "Warning: send-email script not found at $SEND_EMAIL_SCRIPT. Email not sent."
         log "Subject: $subject"
         log "Message: $message"
     fi
