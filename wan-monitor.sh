@@ -16,6 +16,10 @@ STATE_FILE="/var/run/wan-monitor.state"
 EMAIL_RECIPIENT="alex@goodkind.io"
 SEND_EMAIL_SCRIPT="/opt/scripts/send-email"
 
+log() {
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" | tee -a "$LOG"
+}
+
 # Parse arguments
 DRY_RUN=false
 if [[ "$*" =~ --dry-run ]] || [[ "$*" =~ -d ]]; then
@@ -23,10 +27,6 @@ if [[ "$*" =~ --dry-run ]] || [[ "$*" =~ -d ]]; then
     log "=== DRY RUN MODE: No routes will be changed, but emails \
 will be sent ==="
 fi
-
-log() {
-    echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" | tee -a "$LOG"
-}
 
 send_email() {
     local subject="$1"
