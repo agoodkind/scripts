@@ -1,11 +1,30 @@
 #!/usr/bin/env bash
 
-# Monitor primary WAN (vmbr0) and failover to backup (enp4s0) if needed
-# This script checks connectivity and automatically switches routes when
-# the primary WAN fails
+# WAN Failover Monitor
+# Monitor primary WAN (vmbr0) and failover to backup (vmbr1) if needed.
+# Checks IPv6 connectivity first (priority), then IPv4.
+#
+# DEPLOYMENT:
+#   Target host: vault (Proxmox host)
+#   Script location: /opt/scripts/wan-monitor
+#   Deploy with: cd configs/proxmox && rake wan_monitor:deploy
+#
+# RELATED FILES (in configs/proxmox/):
+#   systemd/wan-monitor.service  - Systemd service unit
+#   systemd/wan-monitor.timer    - Timer (runs every 10s)
+#   dhclient-hooks/vmbr1-metric  - Sets metric 199 on vmbr1 DHCP lease
+#
+# ON VAULT:
+#   /etc/systemd/system/wan-monitor.service
+#   /etc/systemd/system/wan-monitor.timer
+#   /etc/dhcp/dhclient-exit-hooks.d/vmbr1-metric
+#
+# COMMANDS:
+#   rake wan_monitor:status  - Check service status
+#   rake wan_monitor:logs    - View recent logs
 
 PRIMARY_IF="vmbr0"
-BACKUP_IF="enp4s0"
+BACKUP_IF="vmbr1"
 PRIMARY_GW4="10.250.0.1"
 PRIMARY_GW6="3d06:bad:b01::1"
 TEST_HOST4="8.8.8.8"
