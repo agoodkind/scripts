@@ -1,225 +1,125 @@
 #!/usr/bin/env bash
+# Compact email sender with system info (multipart: plain + HTML)
+set -uo pipefail
 
-# Simple email sender with system information
-
-set -euo pipefail
-
-# Globals
-SENDER_NAME=""
-RECIPIENT=""
-SUBJECT=""
-MESSAGE=""
-FROM_ADDRESS=""
 HOSTNAME=$(hostname)
+TO="" SUBJECT="" MSG="" FROM="" NAME="" CALLER=""
 
-show_usage() {
-    cat << EOF
-Usage: $0 -t <recipient> -s <subject> -m <message> [options]
+die() { echo "Error: $1" >&2; exit 1; }
+usage() { echo "Usage: $0 -t TO -s SUBJ -m MSG [-n NAME] [-c CALLER]"; exit 1; }
 
-Options:
-  -t, --to      Recipient email address (required)
-  -s, --subject Email subject (required)
-  -m, --message Email message body (required)
-  -f, --from    From email address (default: hostname-mailer@goodkind.io)
-  -n, --name    Sender display name (default: hostname)
-  -h, --help    Show this help message
+# --- System Info ---
+get_uptime() { uptime -p 2>/dev/null | sed 's/up //'; }
+get_load()   { uptime | awk -F'load average:' '{print $2}' | xargs; }
+get_memory() { free -h | awk '/Mem:/{printf "%s/%s",$3,$2}'; }
+get_disk()   { df -h / | awk 'NR==2{printf "%s/%s (%s)",$3,$2,$5}'; }
+
+get_ips() {
+    ip -"$1" -o addr 2>/dev/null | awk '
+        $2!="lo" && $4!~/^fe80/ {gsub(/\/.*/,"",$4); print $2,$4}'
+}
+
+infer_caller() {
+    local c; c=$(ps -p $PPID -o comm= 2>/dev/null)
+    [[ "$c" =~ ^(bash|sh|zsh)$ ]] && \
+        c=$(ps -p $PPID -o args= | awk '{print $NF}' | xargs basename)
+    echo "${c:-unknown}"
+}
+
+# --- Plain Text ---
+render_plain() {
+    echo -e "$MSG"
+    echo ""
+    echo "CALLER"
+    printf "  %-8s %s\n" "Script:" "$CALLER"
+    printf "  %-8s %s\n" "Time:" "$(date +'%Y-%m-%d %H:%M:%S %Z')"
+    printf "  %-8s %s\n" "User:" "$(whoami)"
+    echo ""
+    echo "SYSTEM"
+    printf "  %-8s %s\n" "Host:" "$HOSTNAME"
+    printf "  %-8s %s\n" "Uptime:" "$(get_uptime)"
+    printf "  %-8s %s\n" "Load:" "$(get_load)"
+    printf "  %-8s %s\n" "Memory:" "$(get_memory)"
+    printf "  %-8s %s\n" "Disk:" "$(get_disk)"
+    echo ""
+    echo "NETWORK"
+    get_ips 4 | while read -r iface ip; do
+        printf "  %-8s %s\n" "$iface:" "$ip"
+    done
+    get_ips 6 | while read -r iface ip; do
+        printf "  %-8s %s\n" "$iface:" "$ip"
+    done
+}
+
+# --- HTML (message prominent, metadata as footer) ---
+render_html() {
+    cat <<EOF
+<!DOCTYPE html><html><head><style>
+body{font:14px -apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0}
+.meta{margin-top:16px;padding-top:12px;border-top:1px solid rgba(128,128,128,0.2);
+font-size:11px;opacity:0.6}
+.meta table{border-collapse:collapse}
+.meta td{padding:1px 0}
+.meta .k{padding-right:12px;opacity:0.7}
+</style></head><body>
+<div>$(echo -e "$MSG")</div>
+<div class="meta">
+<table>
+<tr><td class="k">Caller</td><td>$CALLER</td></tr>
+<tr><td class="k">Time</td><td>$(date +'%Y-%m-%d %H:%M %Z')</td></tr>
+<tr><td class="k">Host</td><td>$HOSTNAME</td></tr>
+<tr><td class="k">Uptime</td><td>$(get_uptime)</td></tr>
+<tr><td class="k">Load</td><td>$(get_load)</td></tr>
+<tr><td class="k">Memory</td><td>$(get_memory)</td></tr>
+<tr><td class="k">Disk</td><td>$(get_disk)</td></tr>
+$(get_ips 4 | while read -r i ip; do echo "<tr><td class=\"k\">$i</td><td>$ip</td></tr>"; done)
+$(get_ips 6 | while read -r i ip; do echo "<tr><td class=\"k\">$i</td><td>$ip</td></tr>"; done)
+</table>
+</div>
+</body></html>
 EOF
 }
 
-die() { echo "Error: $1" >&2; exit 1; }
-
-# Generate aligned key-value lines into array
-# Usage: aligned_lines outarray labels[@] values[@]
-aligned_lines() {
-    local -n _out=$1 _labels=$2 _values=$3
-    local max_w=0 i
-
-    for l in "${_labels[@]}"; do
-        (( ${#l} > max_w )) && max_w=${#l}
-    done
-    for i in "${!_labels[@]}"; do
-        _out+=("$(printf "%-${max_w}s  %s" "${_labels[$i]}" "${_values[$i]}")")
-    done
-}
-
-# Print two arrays side by side with gap
-# Usage: print_side_by_side left[@] right[@] [gap]
-print_side_by_side() {
-    local -n _left=$1 _right=$2
-    local gap=${3:-4}
-    local max_left=0 i line_l line_r
-    local max_rows=$(( ${#_left[@]} > ${#_right[@]} \
-        ? ${#_left[@]} : ${#_right[@]} ))
-
-    for line in "${_left[@]}"; do
-        (( ${#line} > max_left )) && max_left=${#line}
-    done
-
-    for (( i=0; i<max_rows; i++ )); do
-        line_l="${_left[$i]:-}"
-        line_r="${_right[$i]:-}"
-        printf "%-${max_left}s%*s%s\n" "$line_l" "$gap" "" "$line_r"
-    done
-}
-
-get_uptime() {
-    if uptime -p 2>/dev/null | grep -q .; then
-        uptime -p | sed 's/up //'
-    else
-        uptime | sed 's/.*up //; s/,  *[0-9]* user.*//'
-    fi
-}
-
-get_load() {
-    uptime | awk -F'load average:' '{print $2}' | sed 's/^ *//'
-}
-
-get_memory() {
-    if command -v free >/dev/null 2>&1; then
-        free -h 2>/dev/null | awk '/^Mem:/ {printf "%s/%s", $3, $2}'
-    elif [[ "$(uname)" == "Darwin" ]]; then
-        local pages_active pages_wired mem_total mem_gb mem_used
-        pages_active=$(vm_stat | awk '/Pages active/ {print $3}' | tr -d '.')
-        pages_wired=$(vm_stat | awk '/Pages wired/ {print $4}' | tr -d '.')
-        mem_total=$(sysctl -n hw.memsize 2>/dev/null)
-        if [[ -n "$mem_total" ]]; then
-            mem_gb=$(echo "scale=0; $mem_total / 1073741824" | bc)
-            mem_used=$(echo "scale=1; \
-                ($pages_active + $pages_wired) * 4096 / 1073741824" | bc 2>/dev/null)
-            [[ -n "$mem_used" ]] && echo "${mem_used}G/${mem_gb}G"
-        fi
-    fi
-}
-
-get_disk() {
-    df -h / 2>/dev/null | awk 'NR==2 {print $5 " (" $3 "/" $2 ")"}'
-}
-
-parse_ip_output() {
-    local -n _l=$1 _v=$2
-    local ver=$3 line iface addr
-
-    while IFS= read -r line; do
-        iface=$(echo "$line" | awk '{print $2}')
-        addr=$(echo "$line" | awk '{print $4}' | sed 's/\/.*//')
-        [[ "$iface" == lo* ]] && continue
-        [[ "$ver" == "6" && "$addr" == fe80* ]] && continue
-        _l+=("$iface"); _v+=("$addr")
-    done < <(ip "-$ver" -o addr show 2>/dev/null)
-}
-
-# Check if ip command supports -o flag (Linux ip vs iproute2mac)
-ip_supports_oneline() {
-    ip -4 -o addr show &>/dev/null
-}
-
-parse_ifconfig_output() {
-    local -n _l=$1 _v=$2
-    local cur_iface="" line addr
-
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^[a-z] ]]; then
-            cur_iface=$(echo "$line" | awk '{print $1}' | tr -d ':')
-        elif [[ "$cur_iface" == lo* ]]; then
-            continue
-        elif [[ "$line" =~ "inet " ]]; then
-            _l+=("$cur_iface")
-            _v+=("$(echo "$line" | awk '{print $2}')")
-        elif [[ "$line" =~ "inet6 " ]]; then
-            addr=$(echo "$line" | awk '{print $2}' | sed 's/%.*//')
-            [[ "$addr" != fe80* ]] && { _l+=("$cur_iface"); _v+=("$addr"); }
-        fi
-    done < <(ifconfig 2>/dev/null)
-}
-
-get_network_ip() {
-    local -n _labels=$1 _values=$2
-
-    if command -v ip >/dev/null 2>&1 && ip_supports_oneline; then
-        parse_ip_output _labels _values 4
-        parse_ip_output _labels _values 6
-    else
-        parse_ifconfig_output _labels _values
-    fi
-}
-
-generate_body() {
-    echo -e "$MESSAGE"
-    echo ""
-
-    local -a labels values
-    labels=("Host" "Date" "User" "Uptime" "Load")
-    values=(
-        "$HOSTNAME"
-        "$(date '+%Y-%m-%d %H:%M:%S %Z')"
-        "$(whoami)"
-        "$(get_uptime)"
-        "$(get_load)"
-    )
-
-    local mem disk
-    mem=$(get_memory)
-    [[ -n "$mem" ]] && { labels+=("Mem"); values+=("$mem"); }
-    disk=$(get_disk)
-    [[ -n "$disk" ]] && { labels+=("Disk"); values+=("$disk"); }
-
-    local -a net_labels net_values
-    get_network_ip net_labels net_values
-
-    # Build lines for each column
-    local -a sys_lines net_lines
-    sys_lines=("-- System --")
-    aligned_lines sys_lines labels values
-
-    net_lines=("-- Network --")
-    aligned_lines net_lines net_labels net_values
-
-    print_side_by_side sys_lines net_lines
-}
-
+# --- Send ---
 send_email() {
-    local from_header="$SENDER_NAME $HOSTNAME <$FROM_ADDRESS>"
-
-    if command -v sendmail >/dev/null 2>&1; then
-        {
-            echo "From: $from_header"
-            echo "To: $RECIPIENT"
-            echo "Subject: $SUBJECT"
-            echo ""
-            generate_body
-        } | sendmail -t -f "$FROM_ADDRESS"
-    elif command -v mail >/dev/null 2>&1; then
-        generate_body | mail -s "$SUBJECT" -a "From: $from_header" "$RECIPIENT"
-    else
-        die "No mail command found (sendmail or mail)"
-    fi
+    local hdr="$NAME $HOSTNAME <$FROM>" bnd="----=_$(date +%s)_$$"
+    {
+        echo "From: $hdr"
+        echo "To: $TO"
+        echo "Subject: $SUBJECT"
+        echo "MIME-Version: 1.0"
+        echo "Content-Type: multipart/alternative; boundary=\"$bnd\""
+        echo ""
+        echo "--$bnd"
+        echo "Content-Type: text/plain; charset=UTF-8"
+        echo ""
+        render_plain
+        echo ""
+        echo "--$bnd"
+        echo "Content-Type: text/html; charset=UTF-8"
+        echo ""
+        render_html
+        echo ""
+        echo "--$bnd--"
+    } | sendmail -t -f "$FROM"
 }
 
-parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -t|--to) RECIPIENT="$2"; shift 2 ;;
-            -s|--subject) SUBJECT="$2"; shift 2 ;;
-            -m|--message) MESSAGE="$2"; shift 2 ;;
-            -f|--from) FROM_ADDRESS="$2"; shift 2 ;;
-            -n|--name) SENDER_NAME="$2"; shift 2 ;;
-            -c|--caller) shift 2 ;;
-            -h|--help) show_usage; exit 0 ;;
-            *) die "Unknown option $1" ;;
-        esac
-    done
+# --- Main ---
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -t) TO="$2"; shift 2 ;;
+        -s) SUBJECT="$2"; shift 2 ;;
+        -m) MSG="$2"; shift 2 ;;
+        -f) FROM="$2"; shift 2 ;;
+        -n) NAME="$2"; shift 2 ;;
+        -c) CALLER="$2"; shift 2 ;;
+        *)  usage ;;
+    esac
+done
 
-    if [[ -z "$RECIPIENT" || -z "$MESSAGE" ]]; then
-        show_usage
-        die "Missing required arguments"
-    fi
-    [[ -z "$FROM_ADDRESS" ]] && FROM_ADDRESS="${HOSTNAME}-mailer@goodkind.io"
-    [[ -z "$SENDER_NAME" ]] && SENDER_NAME="$HOSTNAME"
-}
+[[ -z "$TO" || -z "$MSG" ]] && usage
+[[ -z "$FROM" ]]   && FROM="${HOSTNAME}-mailer@goodkind.io"
+[[ -z "$NAME" ]]   && NAME="$HOSTNAME"
+[[ -z "$CALLER" ]] && CALLER=$(infer_caller)
 
-main() {
-    parse_args "$@"
-    send_email && echo "Email sent to $RECIPIENT" || die "Failed to send email"
-}
-
-main "$@"
+send_email && echo "Email sent to $TO" || die "Failed"
