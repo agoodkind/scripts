@@ -178,7 +178,7 @@ generate_body() {
 }
 
 send_email() {
-    local from_header="$SENDER_NAME [$HOSTNAME] <$FROM_ADDRESS>"
+    local from_header="$SENDER_NAME $HOSTNAME <$FROM_ADDRESS>"
 
     if command -v sendmail >/dev/null 2>&1; then
         {
