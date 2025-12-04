@@ -68,8 +68,9 @@ init_log() {
 get_stat() {
     local key="$1"
     local default="$2"
+    local val
     if [ -f "$STATS_FILE" ]; then
-        local val=$(grep "^$key=" "$STATS_FILE" 2>/dev/null | cut -d= -f2)
+        val=$(grep "^$key=" "$STATS_FILE" 2>/dev/null | cut -d= -f2)
         echo "${val:-$default}"
     else
         echo "$default"
@@ -94,7 +95,8 @@ set_stat() {
 # Increment a counter stat
 inc_stat() {
     local key="$1"
-    local cur=$(get_stat "$key" 0)
+    local cur
+    cur=$(get_stat "$key" 0)
     set_stat "$key" $((cur + 1))
 }
 
@@ -114,14 +116,16 @@ format_duration() {
 
 # Get stats summary for emails
 get_stats_summary() {
-    local now=$(date +%s)
-    local state_since=$(get_stat "state_since" "$now")
-    local duration=$((now - state_since))
-    local failovers=$(get_stat "failovers" 0)
-    local recoveries=$(get_stat "recoveries" 0)
-    local outages=$(get_stat "outages" 0)
-    local last_primary=$(get_stat "last_primary" "never")
-    local last_failover=$(get_stat "last_failover" "never")
+    local now state_since duration failovers recoveries outages
+    local last_primary last_failover
+    now=$(date +%s)
+    state_since=$(get_stat "state_since" "$now")
+    duration=$((now - state_since))
+    failovers=$(get_stat "failovers" 0)
+    recoveries=$(get_stat "recoveries" 0)
+    outages=$(get_stat "outages" 0)
+    last_primary=$(get_stat "last_primary" "never")
+    last_failover=$(get_stat "last_failover" "never")
     
     [ "$last_primary" != "never" ] && \
         last_primary=$(date -d "@$last_primary" '+%Y-%m-%d %H:%M' 2>/dev/null || \
@@ -142,7 +146,8 @@ get_stats_summary() {
 update_stats_on_change() {
     local new_state="$1"
     local old_state="$2"
-    local now=$(date +%s)
+    local now
+    now=$(date +%s)
     
     set_stat "state_since" "$now"
     set_stat "last_state" "$old_state"
@@ -299,7 +304,8 @@ check_connectivity() {
 
 adjust_routes() {
     local use_backup=$1
-    local current_state=$(get_current_state)
+    local current_state
+    current_state=$(get_current_state)
     
     if [ "$use_backup" = "true" ]; then
         BACKUP_GW4=$(ip route show default dev "$BACKUP_IF" \

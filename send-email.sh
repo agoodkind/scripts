@@ -82,7 +82,9 @@ EOF
 
 # --- Send ---
 send_email() {
-    local hdr="$NAME $HOSTNAME <$FROM>" bnd="----=_$(date +%s)_$$"
+    local hdr="$NAME $HOSTNAME <$FROM>"
+    local bnd
+    bnd="----=_$(date +%s)_$$"
     {
         echo "From: $hdr"
         echo "To: $TO"
@@ -122,4 +124,8 @@ done
 [[ -z "$NAME" ]]   && NAME="$HOSTNAME"
 [[ -z "$CALLER" ]] && CALLER=$(infer_caller)
 
-send_email && echo "Email sent to $TO" || die "Failed"
+if send_email; then
+    echo "Email sent to $TO"
+else
+    die "Failed"
+fi
