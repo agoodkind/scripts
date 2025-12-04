@@ -62,7 +62,7 @@ font-size:11px;opacity:0.6}
 .meta td{padding:1px 0}
 .meta .k{padding-right:12px;opacity:0.7}
 </style></head><body>
-<div>$(echo -e "$MSG")</div>
+<div>$(echo -e "$MSG" | sed 's/$/<br>/')</div>
 <div class="meta">
 <table>
 <tr><td class="k">Caller</td><td>$CALLER</td></tr>
