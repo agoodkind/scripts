@@ -6,12 +6,12 @@ HOSTNAME=$(hostname)
 TO="" SUBJECT="" MSG="" FROM="" NAME="" CALLER=""
 
 die() { echo "Error: $1" >&2; exit 1; }
-usage() { echo "Usage: $0 -t TO -s SUBJ -m MSG [-n NAME] [-c CALLER]"; exit 1; }
+usage() { echo "Usage: $0 -t TO -s SUBJ -m MSG [-f FROM] [-n NAME] [-c CALLER]"; exit 1; }
 
 # --- System Info ---
 get_uptime() { uptime -p 2>/dev/null | sed 's/up //'; }
 get_load()   { uptime | awk -F'load average:' '{print $2}' | xargs; }
-get_memory() { free -h | awk '/Mem:/{printf "%s/%s",$3,$2}'; }
+get_memory() { free -h 2>/dev/null | awk '/Mem:/{printf "%s/%s",$3,$2}'; }
 get_disk()   { df -h / | awk 'NR==2{printf "%s/%s (%s)",$3,$2,$5}'; }
 
 get_ips() {
@@ -80,30 +80,36 @@ $(get_ips 6 | while read -r i ip; do echo "<tr><td class=\"k\">$i</td><td>$ip</t
 EOF
 }
 
-# --- Send ---
+# --- Send multipart email ---
 send_email() {
-    local hdr="$NAME $HOSTNAME <$FROM>"
-    local bnd
-    bnd="----=_$(date +%s)_$$"
-    {
-        echo "From: $hdr"
-        echo "To: $TO"
-        echo "Subject: $SUBJECT"
-        echo "MIME-Version: 1.0"
-        echo "Content-Type: multipart/alternative; boundary=\"$bnd\""
-        echo ""
-        echo "--$bnd"
-        echo "Content-Type: text/plain; charset=UTF-8"
-        echo ""
-        render_plain
-        echo ""
-        echo "--$bnd"
-        echo "Content-Type: text/html; charset=UTF-8"
-        echo ""
-        render_html
-        echo ""
-        echo "--$bnd--"
-    } | sendmail -t -f "$FROM"
+    local from_header="\"$NAME [$HOSTNAME]\" <$FROM>"
+    local boundary="----=_Part_$(date +%s)_$$"
+
+    if command -v sendmail >/dev/null 2>&1; then
+        {
+            echo "From: $from_header"
+            echo "To: $TO"
+            echo "Subject: $SUBJECT"
+            echo "MIME-Version: 1.0"
+            echo "Content-Type: multipart/alternative; boundary=\"$boundary\""
+            echo ""
+            echo "--$boundary"
+            echo "Content-Type: text/plain; charset=UTF-8"
+            echo ""
+            render_plain
+            echo ""
+            echo "--$boundary"
+            echo "Content-Type: text/html; charset=UTF-8"
+            echo ""
+            render_html
+            echo ""
+            echo "--$boundary--"
+        } | sendmail -t -f "$FROM"
+    elif command -v mail >/dev/null 2>&1; then
+        render_plain | mail -s "$SUBJECT" -a "From: $from_header" "$TO"
+    else
+        die "No mail command found (sendmail or mail)"
+    fi
 }
 
 # --- Main ---
@@ -119,9 +125,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -z "$TO" || -z "$MSG" ]] && usage
-[[ -z "$FROM" ]]   && FROM="${HOSTNAME}-mailer@goodkind.io"
-[[ -z "$NAME" ]]   && NAME="$HOSTNAME"
+[[ -z "$TO" || -z "$MSG" ]] && { usage; die "Missing required arguments"; }
+[[ -z "$FROM" ]] && FROM="${HOSTNAME}-mailer@goodkind.io"
+[[ -z "$NAME" ]] && NAME="$HOSTNAME"
 [[ -z "$CALLER" ]] && CALLER=$(infer_caller)
 
 if send_email; then
