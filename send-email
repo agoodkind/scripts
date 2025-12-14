@@ -20,9 +20,18 @@ get_ips() {
 }
 
 infer_caller() {
-    local c; c=$(ps -p $PPID -o comm= 2>/dev/null)
-    [[ "$c" =~ ^(bash|sh|zsh)$ ]] && \
-        c=$(ps -p $PPID -o args= | awk '{print $NF}' | xargs basename)
+    local c
+    c=$(ps -p "$PPID" -o comm= 2>/dev/null || true)
+
+    if [[ "$c" =~ ^(bash|sh|zsh)$ ]]; then
+        local last_arg
+        last_arg=$(ps -p "$PPID" -o args= 2>/dev/null | awk '{print $NF}' || true)
+        last_arg="${last_arg#"${last_arg%%[![:space:]]*}"}"
+        last_arg="${last_arg%"${last_arg##*[![:space:]]}"}"
+        if [ -n "$last_arg" ]; then
+            c=$(basename "$last_arg")
+        fi
+    fi
     echo "${c:-unknown}"
 }
 
