@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
-# Install launchd agent to auto-update /usr/local/opt/scripts from git
+# Install launchd daemon to auto-update /usr/local/opt/scripts from git
 # macOS equivalent of the systemd-based install-updater for Linux
+# Uses LaunchDaemon (system-level) so it can be controlled from SSH
 #
 
 set -euo pipefail
 
 SCRIPTS_REPO="https://github.com/agoodkind/scripts.git"
 SCRIPTS_DIR="/usr/local/opt/scripts"
-AGENT_NAME="com.agoodkind.scripts-updater"
-AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_NAME}.plist"
+DAEMON_NAME="com.agoodkind.scripts-updater"
+DAEMON_PLIST="/Library/LaunchDaemons/${DAEMON_NAME}.plist"
 
 # Colors
 RED='\033[0;31m'
@@ -51,18 +52,17 @@ setup_repo() {
     chmod -R +x "$SCRIPTS_DIR"
 }
 
-# Create launchd agent plist
-create_agent() {
-    log "Creating launchd agent..."
-    mkdir -p "$HOME/Library/LaunchAgents"
+# Create launchd daemon plist
+create_daemon() {
+    log "Creating launchd daemon..."
     
-    cat > "$AGENT_PLIST" << EOF
+    sudo tee "$DAEMON_PLIST" > /dev/null << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${AGENT_NAME}</string>
+    <string>${DAEMON_NAME}</string>
     
     <key>ProgramArguments</key>
     <array>
@@ -85,31 +85,30 @@ create_agent() {
     <true/>
     
     <key>StandardOutPath</key>
-    <string>/tmp/scripts-updater.log</string>
+    <string>/var/log/scripts-updater.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/scripts-updater.log</string>
+    <string>/var/log/scripts-updater.log</string>
 </dict>
 </plist>
 EOF
+    
+    # Set proper ownership and permissions
+    sudo chown root:wheel "$DAEMON_PLIST"
+    sudo chmod 644 "$DAEMON_PLIST"
 }
 
-# Load the agent
-load_agent() {
-    log "Loading launchd agent..."
+# Load the daemon
+load_daemon() {
+    log "Loading launchd daemon..."
     
-    # Unload if already loaded (try both methods)
-    launchctl bootout "gui/$(id -u)/${AGENT_NAME}" 2>/dev/null || true
-    launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+    # Unload if already loaded
+    sudo launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
     
-    # Load the new agent
-    # Try modern bootstrap first (requires GUI session), fall back to legacy load
-    if ! launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null; then
-        # Fallback for SSH/non-GUI contexts
-        if launchctl load "$AGENT_PLIST" 2>/dev/null; then
-            log "Loaded via legacy launchctl load"
-        else
-            warn "Could not load agent now (will load on next login)"
-        fi
+    # Load the daemon
+    if sudo launchctl load "$DAEMON_PLIST"; then
+        log "Daemon loaded successfully"
+    else
+        error "Failed to load daemon"
     fi
 }
 
@@ -158,21 +157,21 @@ show_status() {
     echo ""
     log "Installation complete!"
     log "Scripts installed to: $SCRIPTS_DIR"
-    log "LaunchAgent: $AGENT_PLIST"
+    log "LaunchDaemon: $DAEMON_PLIST"
     echo ""
     log "Useful commands:"
-    echo "  Check status:  launchctl list | grep ${AGENT_NAME}"
-    echo "  Run now:       launchctl start ${AGENT_NAME}"
-    echo "  View log:      cat /tmp/scripts-updater.log"
-    echo "  Unload:        launchctl unload $AGENT_PLIST"
+    echo "  Check status:  sudo launchctl list | grep ${DAEMON_NAME}"
+    echo "  Run now:       sudo launchctl start ${DAEMON_NAME}"
+    echo "  View log:      cat /var/log/scripts-updater.log"
+    echo "  Unload:        sudo launchctl unload $DAEMON_PLIST"
 }
 
 main() {
-    log "Installing scripts-updater for macOS..."
+    log "Installing scripts-updater for macOS (LaunchDaemon)..."
     check_macos
     setup_repo
-    create_agent
-    load_agent
+    create_daemon
+    load_daemon
     setup_path
     create_symlinks
     show_status

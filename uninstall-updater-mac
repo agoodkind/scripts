@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #
-# Uninstall launchd agent and optionally remove scripts
+# Uninstall launchd daemon and optionally remove scripts
 #
 
 set -euo pipefail
 
 SCRIPTS_DIR="/usr/local/opt/scripts"
-AGENT_NAME="com.agoodkind.scripts-updater"
-AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_NAME}.plist"
+DAEMON_NAME="com.agoodkind.scripts-updater"
+DAEMON_PLIST="/Library/LaunchDaemons/${DAEMON_NAME}.plist"
+
+# Also check for old LaunchAgent location
+OLD_AGENT_PLIST="$HOME/Library/LaunchAgents/${DAEMON_NAME}.plist"
 
 # Colors
 RED='\033[0;31m'
@@ -37,13 +40,21 @@ remove_symlinks() {
     fi
 }
 
-unload_agent() {
-    log "Unloading launchd agent..."
-    launchctl bootout "gui/$(id -u)/${AGENT_NAME}" 2>/dev/null || true
+unload_daemon() {
+    log "Unloading launchd daemon..."
     
-    if [[ -f "$AGENT_PLIST" ]]; then
-        rm "$AGENT_PLIST"
-        log "Removed: $AGENT_PLIST"
+    # Unload LaunchDaemon
+    sudo launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
+    if [[ -f "$DAEMON_PLIST" ]]; then
+        sudo rm "$DAEMON_PLIST"
+        log "Removed: $DAEMON_PLIST"
+    fi
+    
+    # Also clean up old LaunchAgent if it exists
+    if [[ -f "$OLD_AGENT_PLIST" ]]; then
+        launchctl unload "$OLD_AGENT_PLIST" 2>/dev/null || true
+        rm "$OLD_AGENT_PLIST"
+        log "Removed old LaunchAgent: $OLD_AGENT_PLIST"
     fi
 }
 
@@ -66,7 +77,7 @@ main() {
     log "Uninstalling scripts-updater for macOS..."
     
     remove_symlinks
-    unload_agent
+    unload_daemon
     remove_path
     
     if [[ "${1:-}" == "--remove-scripts" ]]; then
