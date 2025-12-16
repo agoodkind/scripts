@@ -11,6 +11,7 @@ SCRIPTS_REPO="https://github.com/agoodkind/scripts.git"
 SCRIPTS_DIR="/usr/local/opt/scripts"
 DAEMON_NAME="com.agoodkind.scripts-updater"
 DAEMON_PLIST="/Library/LaunchDaemons/${DAEMON_NAME}.plist"
+OLD_AGENT_PLIST="$HOME/Library/LaunchAgents/${DAEMON_NAME}.plist"
 
 # Colors
 RED='\033[0;31m'
@@ -50,6 +51,16 @@ setup_repo() {
         git clone "$SCRIPTS_REPO" "$SCRIPTS_DIR"
     fi
     chmod -R +x "$SCRIPTS_DIR"
+}
+
+# Remove old LaunchAgent if it exists
+cleanup_old_agent() {
+    if [[ -f "$OLD_AGENT_PLIST" ]]; then
+        log "Removing old LaunchAgent..."
+        launchctl unload "$OLD_AGENT_PLIST" 2>/dev/null || true
+        launchctl bootout "gui/$(id -u)/${DAEMON_NAME}" 2>/dev/null || true
+        rm -f "$OLD_AGENT_PLIST"
+    fi
 }
 
 # Create launchd daemon plist
@@ -169,6 +180,7 @@ show_status() {
 main() {
     log "Installing scripts-updater for macOS (LaunchDaemon)..."
     check_macos
+    cleanup_old_agent
     setup_repo
     create_daemon
     load_daemon
