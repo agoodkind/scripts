@@ -97,11 +97,20 @@ EOF
 load_agent() {
     log "Loading launchd agent..."
     
-    # Unload if already loaded
+    # Unload if already loaded (try both methods)
     launchctl bootout "gui/$(id -u)/${AGENT_NAME}" 2>/dev/null || true
+    launchctl unload "$AGENT_PLIST" 2>/dev/null || true
     
     # Load the new agent
-    launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST"
+    # Try modern bootstrap first (requires GUI session), fall back to legacy load
+    if ! launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null; then
+        # Fallback for SSH/non-GUI contexts
+        if launchctl load "$AGENT_PLIST" 2>/dev/null; then
+            log "Loaded via legacy launchctl load"
+        else
+            warn "Could not load agent now (will load on next login)"
+        fi
+    fi
 }
 
 # Add to PATH via shell profile
@@ -152,10 +161,10 @@ show_status() {
     log "LaunchAgent: $AGENT_PLIST"
     echo ""
     log "Useful commands:"
-    echo "  Check status:  launchctl print gui/$(id -u)/${AGENT_NAME}"
-    echo "  Run now:       launchctl kickstart gui/$(id -u)/${AGENT_NAME}"
+    echo "  Check status:  launchctl list | grep ${AGENT_NAME}"
+    echo "  Run now:       launchctl start ${AGENT_NAME}"
     echo "  View log:      cat /tmp/scripts-updater.log"
-    echo "  Unload:        launchctl bootout gui/$(id -u)/${AGENT_NAME}"
+    echo "  Unload:        launchctl unload $AGENT_PLIST"
 }
 
 main() {
