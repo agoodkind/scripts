@@ -145,7 +145,7 @@ EOF
 
 # --- Send multipart email ---
 send_email() {
-    local from_header="\"$NAME [$HOSTNAME]\" <$FROM>"
+    local from_header="\"$NAME\" <$FROM>"
     local boundary="----=_Part_$(date +%s)_$$"
 
     if command -v sendmail >/dev/null 2>&1; then
