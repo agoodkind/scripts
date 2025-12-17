@@ -103,24 +103,22 @@ infer_caller() {
 render_plain() {
     echo -e "$MSG"
     echo ""
-    echo "CALLER"
-    printf "  %-8s %s\n" "Script:" "$CALLER"
-    printf "  %-8s %s\n" "Time:" "$(date +'%Y-%m-%d %H:%M:%S %Z')"
-    printf "  %-8s %s\n" "User:" "$(whoami)"
     echo ""
-    echo "SYSTEM"
-    printf "  %-8s %s\n" "Host:" "$HOSTNAME"
-    printf "  %-8s %s\n" "Uptime:" "$(get_uptime)"
-    printf "  %-8s %s\n" "Load:" "$(get_load)"
-    printf "  %-8s %s\n" "Memory:" "$(get_memory)"
-    printf "  %-8s %s\n" "Disk:" "$(get_disk)"
+    echo "---"
     echo ""
-    echo "NETWORK"
+    printf "%-10s %s\n" "Caller:" "$CALLER"
+    printf "%-10s %s\n" "Time:" "$(date +'%Y-%m-%d %H:%M:%S %Z')"
+    printf "%-10s %s\n" "Host:" "$HOSTNAME"
+    printf "%-10s %s\n" "Uptime:" "$(get_uptime)"
+    printf "%-10s %s\n" "Load:" "$(get_load)"
+    printf "%-10s %s\n" "Memory:" "$(get_memory)"
+    printf "%-10s %s\n" "Disk:" "$(get_disk)"
+    echo ""
     get_ips 4 | while read -r iface ip; do
-        printf "  %-8s %s\n" "$iface:" "$ip"
+        printf "%-10s %s\n" "$iface:" "$ip"
     done
     get_ips 6 | while read -r iface ip; do
-        printf "  %-8s %s\n" "$iface:" "$ip"
+        printf "%-10s %s\n" "$iface:" "$ip"
     done
 }
 
