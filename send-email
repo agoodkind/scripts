@@ -8,15 +8,79 @@ TO="" SUBJECT="" MSG="" FROM="" NAME="" CALLER=""
 die() { echo "Error: $1" >&2; exit 1; }
 usage() { echo "Usage: $0 -t TO -s SUBJ -m MSG [-f FROM] [-n NAME] [-c CALLER]"; exit 1; }
 
-# --- System Info ---
-get_uptime() { uptime -p 2>/dev/null | sed 's/up //'; }
-get_load()   { uptime | awk -F'load average:' '{print $2}' | xargs; }
-get_memory() { free -h 2>/dev/null | awk '/Mem:/{printf "%s/%s",$3,$2}'; }
-get_disk()   { df -h / | awk 'NR==2{printf "%s/%s (%s)",$3,$2,$5}'; }
+# --- System Info (cross-platform: macOS + Linux) ---
+is_macos() { [[ "$OSTYPE" == "darwin"* ]]; }
+
+get_uptime() {
+    if is_macos; then
+        local boot_time days hours mins
+        boot_time=$(sysctl -n kern.boottime | awk '{print $4}' | tr -d ',')
+        local now=$(date +%s)
+        local uptime_secs=$((now - boot_time))
+        days=$((uptime_secs / 86400))
+        hours=$(( (uptime_secs % 86400) / 3600 ))
+        mins=$(( (uptime_secs % 3600) / 60 ))
+        if ((days > 0)); then
+            printf "%d days, %d hours, %d minutes" "$days" "$hours" "$mins"
+        elif ((hours > 0)); then
+            printf "%d hours, %d minutes" "$hours" "$mins"
+        else
+            printf "%d minutes" "$mins"
+        fi
+    else
+        uptime -p 2>/dev/null | sed 's/up //' || uptime | awk '{print $3,$4}' | tr -d ','
+    fi
+}
+
+get_load() {
+    if is_macos; then
+        sysctl -n vm.loadavg | awk '{print $2, $3, $4}'
+    else
+        uptime | awk -F'load average:' '{print $2}' | xargs
+    fi
+}
+
+get_memory() {
+    if is_macos; then
+        local page_size=$(sysctl -n hw.pagesize)
+        local pages_free=$(vm_stat | awk '/Pages free:/{gsub(/\./,"",$3); print $3}')
+        local pages_active=$(vm_stat | awk '/Pages active:/{gsub(/\./,"",$3); print $3}')
+        local pages_inactive=$(vm_stat | awk '/Pages inactive:/{gsub(/\./,"",$3); print $3}')
+        local pages_wired=$(vm_stat | awk '/Pages wired down:/{gsub(/\./,"",$4); print $4}')
+        local pages_compressed=$(vm_stat | awk '/Pages stored in compressor:/{gsub(/\./,"",$5); print $5}')
+        local total_mem=$(sysctl -n hw.memsize)
+        local used=$((( pages_active + pages_wired + pages_compressed ) * page_size))
+        # Format in GB
+        local used_gb=$(echo "scale=1; $used / 1073741824" | bc)
+        local total_gb=$(echo "scale=1; $total_mem / 1073741824" | bc)
+        printf "%sG/%sG" "$used_gb" "$total_gb"
+    else
+        free -h 2>/dev/null | awk '/Mem:/{printf "%s/%s",$3,$2}'
+    fi
+}
+
+get_disk() { df -h / | awk 'NR==2{printf "%s/%s (%s)",$3,$2,$5}'; }
 
 get_ips() {
-    ip -"$1" -o addr 2>/dev/null | awk '
-        $2!="lo" && $4!~/^fe80/ {gsub(/\/.*/,"",$4); print $2,$4}'
+    local ver="$1"
+    if is_macos; then
+        if [[ "$ver" == "4" ]]; then
+            ifconfig 2>/dev/null | awk '
+                /^[a-z]/ { iface=$1; gsub(/:$/,"",iface) }
+                iface!="lo0" && /inet / && !/127\.0\.0\.1/ {
+                    print iface, $2
+                }'
+        else
+            ifconfig 2>/dev/null | awk '
+                /^[a-z]/ { iface=$1; gsub(/:$/,"",iface) }
+                iface!="lo0" && /inet6 / && !/fe80/ && !/::1/ {
+                    gsub(/%.*$/,"",$2); print iface, $2
+                }'
+        fi
+    else
+        ip -"$ver" -o addr 2>/dev/null | awk '
+            $2!="lo" && $4!~/^fe80/ {gsub(/\/.*/,"",$4); print $2,$4}'
+    fi
 }
 
 infer_caller() {
