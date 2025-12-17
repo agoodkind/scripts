@@ -99,34 +99,9 @@ infer_caller() {
     echo "${c:-unknown}"
 }
 
-# --- Plain Text ---
+# --- Plain Text (message only - stats in HTML version) ---
 render_plain() {
     echo -e "$MSG"
-    # Add significant padding to keep stats out of email preview (~200 chars)
-    echo ""
-    echo ""
-    echo ""
-    echo ""
-    echo ""
-    echo ""
-    echo ""
-    echo ""
-    echo "────────────────────────────────────────"
-    echo ""
-    printf "%-10s %s\n" "Caller:" "$CALLER"
-    printf "%-10s %s\n" "Time:" "$(date +'%Y-%m-%d %H:%M:%S %Z')"
-    printf "%-10s %s\n" "Host:" "$HOSTNAME"
-    printf "%-10s %s\n" "Uptime:" "$(get_uptime)"
-    printf "%-10s %s\n" "Load:" "$(get_load)"
-    printf "%-10s %s\n" "Memory:" "$(get_memory)"
-    printf "%-10s %s\n" "Disk:" "$(get_disk)"
-    echo ""
-    get_ips 4 | while read -r iface ip; do
-        printf "%-10s %s\n" "$iface:" "$ip"
-    done
-    get_ips 6 | while read -r iface ip; do
-        printf "%-10s %s\n" "$iface:" "$ip"
-    done
 }
 
 # --- HTML (message prominent, metadata as footer) ---
