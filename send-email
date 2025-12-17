@@ -102,9 +102,16 @@ infer_caller() {
 # --- Plain Text ---
 render_plain() {
     echo -e "$MSG"
+    # Add significant padding to keep stats out of email preview (~200 chars)
     echo ""
     echo ""
-    echo "---"
+    echo ""
+    echo ""
+    echo ""
+    echo ""
+    echo ""
+    echo ""
+    echo "────────────────────────────────────────"
     echo ""
     printf "%-10s %s\n" "Caller:" "$CALLER"
     printf "%-10s %s\n" "Time:" "$(date +'%Y-%m-%d %H:%M:%S %Z')"
