@@ -106,9 +106,9 @@ render_plain() {
 
 # --- HTML (message prominent, metadata as footer) ---
 render_html() {
-    # Extract first line of message for preheader, pad with whitespace to prevent stats showing
+    # Use full message as preheader, pad with whitespace to prevent stats showing
     local preheader_text
-    preheader_text=$(echo -e "$MSG" | head -1 | sed 's/<[^>]*>//g')
+    preheader_text=$(echo -e "$MSG" | tr '\n' ' ')
     local padding=""
     for _ in {1..100}; do padding+="&nbsp;&zwnj;"; done
     
