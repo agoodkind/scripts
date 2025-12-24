@@ -4,12 +4,12 @@
 
 # --- CONFIGURATION ---
 TO_EMAIL="alex@goodkind.io"
-UPS_NAME="${UPSNAME:-UPS_NAME}"
+UPS_NAME="${UPSNAME%%@*}"
 PID_FILE="/tmp/nut-monitor.pid"
 
 if [ -z "$UPS_NAME" ]; then
-    echo "UPS_NAME is not set"
-    notify "❌ UPS_NAME is not set" "UPS_NAME is not set. Please set the UPS_NAME environment variable."
+    echo "ERROR: UPSNAME not set by upsmon" >&2
+    logger -t upssched-cmd "ERROR: UPSNAME environment variable not set"
     exit 1
 fi
 
@@ -18,6 +18,23 @@ fi
 notify() {
     local SUBJECT="$1"
     local MSG="$2"
+
+    # Fetch current battery info
+    local BATTERY_LEVEL=$(upsc "$UPS_NAME" battery.charge 2>/dev/null || echo "N/A")
+    local BATTERY_RUNTIME=$(upsc "$UPS_NAME" battery.runtime 2>/dev/null || echo "N/A")
+    local BATTERY_VOLTAGE=$(upsc "$UPS_NAME" battery.voltage 2>/dev/null || echo "N/A")
+    local INPUT_VOLTAGE=$(upsc "$UPS_NAME" input.voltage 2>/dev/null || echo "N/A")
+    local UPS_LOAD=$(upsc "$UPS_NAME" ups.load 2>/dev/null || echo "N/A")
+    local UPS_STATUS=$(upsc "$UPS_NAME" ups.status 2>/dev/null || echo "N/A")
+
+    # Append battery health info to message
+    MSG+="\n\n---\n"
+    MSG+="Level: ${BATTERY_LEVEL}%\n"
+    MSG+="Runtime: ${BATTERY_RUNTIME}s\n"
+    MSG+="Battery Voltage: ${BATTERY_VOLTAGE}V\n"
+    MSG+="Input Voltage: ${INPUT_VOLTAGE}V\n"
+    MSG+="Load: ${UPS_LOAD}%\n"
+    MSG+="Status: ${UPS_STATUS}"
 
     # 1. Log to system journal (syslog/journalctl)
     logger -t upssched-cmd "$SUBJECT - $MSG"
@@ -81,7 +98,7 @@ start_monitor() {
 # --- MAIN EVENT HANDLER ---
 case $1 in
     ups-on-battery)
-        notify "⚠️ Power Failure" "UPS switched to battery. Starting discharge monitor."
+        notify "⚠️ On Battery" "UPS switched to battery. Starting discharge monitor."
         start_monitor "discharging"
         ;;
 
