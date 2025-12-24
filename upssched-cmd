@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# NUT Custom Notification Script with Percentage Monitoring
+# Integrates with /opt/scripts/send-email
+
+# --- CONFIGURATION ---
+TO_EMAIL="alex@goodkind.io"
+UPS_NAME="${UPSNAME:-UPS_NAME}"
+PID_FILE="/tmp/nut-monitor.pid"
+
+if [ -z "$UPS_NAME" ]; then
+    echo "UPS_NAME is not set"
+    notify "❌ UPS_NAME is not set" "UPS_NAME is not set. Please set the UPS_NAME environment variable."
+    exit 1
+fi
+
+# --- NOTIFICATION HELPER ---
+# This ensures EVERY event logs to system journal AND sends an email
+notify() {
+    local SUBJECT="$1"
+    local MSG="$2"
+
+    # 1. Log to system journal (syslog/journalctl)
+    logger -t upssched-cmd "$SUBJECT - $MSG"
+
+    # 2. Send Email
+    /opt/scripts/send-email \
+        -t "$TO_EMAIL" \
+        -s "$SUBJECT" \
+        -m "$MSG" \
+        -n "$UPS_NAME 🥜💦 NUT-Service" \
+        -c "🥜💦 NUT-Service"
+}
+
+# --- BACKGROUND MONITOR LOGIC ---
+start_monitor() {
+    local MODE="$1" # "charging" or "discharging"
+
+    # Kill previous monitor if running
+    if [ -f "$PID_FILE" ]; then
+        kill $(cat "$PID_FILE") 2>/dev/null
+        rm "$PID_FILE"
+    fi
+
+    # Start new loop in background
+    (
+        echo $BASHPID > "$PID_FILE"
+        local LAST_VAL=0
+        if [ "$MODE" == "discharging" ]; then LAST_VAL=100; else LAST_VAL=0; fi
+
+        while true; do
+            CURRENT=$(upsc "$UPS_NAME" battery.charge 2>/dev/null)
+            CURRENT=${CURRENT%.*}
+
+            # DISCHARGING LOGIC
+            if [ "$MODE" == "discharging" ]; then
+                # Alert every 10% drop
+                if [ "$CURRENT" -le $((LAST_VAL - 10)) ]; then
+                     notify "⚠️ Battery Draining" "Battery level is down to $CURRENT%."
+                     LAST_VAL=$CURRENT
+                fi
+            fi
+
+            # CHARGING LOGIC
+            if [ "$MODE" == "charging" ]; then
+                # Alert every 20% gain or at 100%
+                if [ "$CURRENT" -ge $((LAST_VAL + 20)) ] || [ "$CURRENT" -eq 100 ]; then
+                     notify "⚡ Battery Recharging" "Battery level has reached $CURRENT%."
+                     LAST_VAL=$CURRENT
+                fi
+                if [ "$CURRENT" -eq 100 ]; then
+                    notify "🔋 Fully Charged" "UPS is back to 100% capacity. Monitor stopping."
+                    rm "$PID_FILE"
+                    break
+                fi
+            fi
+            sleep 30
+        done
+    ) &
+}
+
+# --- MAIN EVENT HANDLER ---
+case $1 in
+    ups-on-battery)
+        notify "⚠️ Power Failure" "UPS switched to battery. Starting discharge monitor."
+        start_monitor "discharging"
+        ;;
+
+    ups-back-on-line)
+        notify "✅ Power Restored" "Utility power restored. Starting charge monitor."
+        start_monitor "charging"
+        ;;
+
+    shutdown_timer)
+        notify "🔌 Shutdown Initiated" "Battery timer expired. Shutting down system now."
+        /sbin/upsmon -c fsd
+        ;;
+
+    ups-low-battery)
+        notify "🚨 CRITICAL BATTERY" "Battery critical! Immediate shutdown."
+        /sbin/upsmon -c fsd
+        ;;
+
+    ups-replace-battery)
+        notify "🔧 Service Required" "UPS reports battery needs replacement."
+        ;;
+
+    ups-comm-bad)
+        notify "⚠️ Comm Lost" "Server lost connection to UPS USB cable."
+        ;;
+
+    ups-comm-ok)
+        notify "✅ Comm Restored" "Server reconnected to UPS."
+        ;;
+
+    ups-forced-shutdown)
+        notify "🛑 System Shutdown" "System is performing a forced shutdown command."
+        ;;
+
+    ups-nocomm)
+        notify "⚠️ No Communication" "UPS is not communicating (stale data)."
+        ;;
+
+    *)
+        # Catch-all for unknown events
+        notify "❓ Unknown UPS Event" "The scheduler received an undefined command: '$1'. Check configuration."
+        ;;
+esac
