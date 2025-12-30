@@ -5,6 +5,7 @@
 # --- CONFIGURATION ---
 TO_EMAIL="alex@goodkind.io"
 UPS_NAME="$UPSNAME"
+UPS_DISPLAY_NAME="${UPSNAME%%@*}"
 HOSTNAME=$(hostname -s)
 PID_FILE="/tmp/nut-monitor.pid"
 
@@ -45,7 +46,7 @@ notify() {
         -t "$TO_EMAIL" \
         -s "[$HOSTNAME] $SUBJECT" \
         -m "$MSG" \
-        -n "$HOSTNAME - $UPS_NAME 🥜💦 NUT-Service" \
+        -n "$HOSTNAME - $UPS_DISPLAY_NAME 🥜💦 NUT-Service" \
         -c "🥜💦 NUT-Service"
 }
 
