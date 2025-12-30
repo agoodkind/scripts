@@ -4,7 +4,8 @@
 
 # --- CONFIGURATION ---
 TO_EMAIL="alex@goodkind.io"
-UPS_NAME="${UPSNAME%%@*}"
+UPS_NAME="$UPSNAME"
+HOSTNAME=$(hostname -s)
 PID_FILE="/tmp/nut-monitor.pid"
 
 if [ -z "$UPS_NAME" ]; then
@@ -29,11 +30,11 @@ notify() {
 
     # Append battery health info to message
     MSG+="\n\n---\n"
-    MSG+="Level: ${BATTERY_LEVEL}%\n"
-    MSG+="Runtime: ${BATTERY_RUNTIME}s\n"
-    MSG+="Battery Voltage: ${BATTERY_VOLTAGE}V\n"
-    MSG+="Input Voltage: ${INPUT_VOLTAGE}V\n"
-    MSG+="Load: ${UPS_LOAD}%\n"
+    MSG+="Level: ${BATTERY_LEVEL}$([[ $BATTERY_LEVEL != N/A ]] && echo %)\n"
+    MSG+="Runtime: ${BATTERY_RUNTIME}$([[ $BATTERY_RUNTIME != N/A ]] && echo s)\n"
+    MSG+="Battery Voltage: ${BATTERY_VOLTAGE}$([[ $BATTERY_VOLTAGE != N/A ]] && echo V)\n"
+    MSG+="Input Voltage: ${INPUT_VOLTAGE}$([[ $INPUT_VOLTAGE != N/A ]] && echo V)\n"
+    MSG+="Load: ${UPS_LOAD}$([[ $UPS_LOAD != N/A ]] && echo %)\n"
     MSG+="Status: ${UPS_STATUS}"
 
     # 1. Log to system journal (syslog/journalctl)
@@ -42,9 +43,9 @@ notify() {
     # 2. Send Email
     /opt/scripts/send-email \
         -t "$TO_EMAIL" \
-        -s "$SUBJECT" \
+        -s "[$HOSTNAME] $SUBJECT" \
         -m "$MSG" \
-        -n "$UPS_NAME 🥜💦 NUT-Service" \
+        -n "$HOSTNAME - $UPS_NAME 🥜💦 NUT-Service" \
         -c "🥜💦 NUT-Service"
 }
 
