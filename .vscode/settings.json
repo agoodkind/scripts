@@ -12,22 +12,5 @@
     ".cache": true,
     "retool.config.json": true
   },
-  "files.associations": {
-    "install-updater": "shellscript",
-    "install-updater-mac": "shellscript",
-    "screenshot": "shellscript",
-    "uninstall-updater": "shellscript",
-    "upssched-cmd": "shellscript",
-    "ddclient-notify": "shellscript",
-    "prep-pve-ct": "shellscript",
-    "wan-monitor": "shellscript",
-    "check-3d06": "shellscript",
-    "uninstall-updater-mac": "shellscript",
-    "cf-lb-sync": "shellscript",
-    "change-proxmox-hostname": "shellscript",
-    "send-email": "shellscript",
-    "backup-vault-host": "shellscript",
-    "reapply-opnsense-changes": "shellscript",
-    "bootstrap-cert": "shellscript"
-  }
+  "files.associations": {}
 }

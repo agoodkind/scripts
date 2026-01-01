@@ -7,49 +7,54 @@ set -euo pipefail
 
 VSCODE_SETTINGS=".vscode/settings.json"
 
-# Find script files (exclude metadata files)
-scripts=$(find . -maxdepth 1 -type f \
-    ! -name ".*" \
-    ! -name "LICENSE" \
-    ! -name "README*" \
-    ! -name "*.md" \
-    ! -name "*.txt" \
-    -print 2>/dev/null || true)
+# Find script files (exclude metadata)
+find_scripts() {
+    local perm_filter="${1:-}"
+    find . -maxdepth 1 -type f "$perm_filter" \
+        ! -name ".*" \
+        ! -name "LICENSE" \
+        ! -name "README*" \
+        ! -name "*.md" \
+        ! -name "*.txt" \
+        2>/dev/null || true
+}
 
 # Track if we made any changes
 made_changes=false
 
 # Ensure all scripts are executable
-for script in $scripts; do
+while IFS= read -r script; do
+    [[ -z "$script" ]] && continue
     if [[ ! -x "$script" ]]; then
         echo "Setting executable bit on: $script"
         chmod +x "$script"
         git add "$script"
         made_changes=true
     fi
-done
+done < <(find_scripts)
 
 # Update VSCode file associations for shell scripts
 if [[ -f "$VSCODE_SETTINGS" ]]; then
-    # Build JSON object with file associations
+    # Get list of executable scripts (basenames only)
+    script_names=$(find_scripts "-perm +111" | xargs -n1 basename)
+    
+    # Build JSON object: {"script1": "shellscript", "script2": "shellscript", ...}
     associations=$(
-        find . -maxdepth 1 -type f -perm +111 \
-            ! -name ".*" \
-            ! -name "LICENSE" \
-            ! -name "README*" \
-            ! -name "*.md" \
-            ! -name "*.txt" \
-            -exec basename {} \; 2>/dev/null | \
-        jq -R -s 'split("\n") | map(select(length > 0)) | 
-                  map({(.): "shellscript"}) | add // {}'
+        echo "$script_names" | \
+        jq --raw-input --slurp '
+            split("\n") |
+            map(select(length > 0)) |
+            map({(.): "shellscript"}) |
+            add // {}
+        '
     )
     
-    # Update settings.json with new associations
+    # Update settings.json with new file associations
     if jq --argjson assoc "$associations" \
         '.["files.associations"] = $assoc' \
-        "$VSCODE_SETTINGS" > "${VSCODE_SETTINGS}.tmp"; then
-        
-        # Check if file changed
+        "$VSCODE_SETTINGS" > "${VSCODE_SETTINGS}.tmp"
+    then
+        # Check if file actually changed
         if ! cmp -s "$VSCODE_SETTINGS" "${VSCODE_SETTINGS}.tmp"; then
             mv "${VSCODE_SETTINGS}.tmp" "$VSCODE_SETTINGS"
             git add "$VSCODE_SETTINGS"
