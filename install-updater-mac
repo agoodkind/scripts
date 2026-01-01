@@ -50,15 +50,6 @@ setup_repo() {
         log "Cloning scripts repo to $SCRIPTS_DIR..."
         git clone "$SCRIPTS_REPO" "$SCRIPTS_DIR"
     fi
-    
-    # Make only actual scripts executable (not metadata files)
-    find "$SCRIPTS_DIR" -maxdepth 1 -type f \
-        ! -name ".*" \
-        ! -name "LICENSE" \
-        ! -name "README*" \
-        ! -name "*.md" \
-        ! -name "*.txt" \
-        -exec chmod +x {} \;
 
     sudo git config --system --add safe.directory "$SCRIPTS_DIR" \
         2>/dev/null || true
