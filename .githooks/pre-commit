@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
-# Pre-commit hook: ensure all scripts are executable
+# Pre-commit hook: ensure all scripts are executable and update VSCode settings
 #
 
 set -euo pipefail
+
+VSCODE_SETTINGS=".vscode/settings.json"
 
 # Find script files (exclude metadata files)
 scripts=$(find . -maxdepth 1 -type f \
@@ -17,8 +19,8 @@ scripts=$(find . -maxdepth 1 -type f \
 # Track if we made any changes
 made_changes=false
 
+# Ensure all scripts are executable
 for script in $scripts; do
-    # Check if file is already executable
     if [[ ! -x "$script" ]]; then
         echo "Setting executable bit on: $script"
         chmod +x "$script"
@@ -27,8 +29,42 @@ for script in $scripts; do
     fi
 done
 
+# Update VSCode file associations for shell scripts
+if [[ -f "$VSCODE_SETTINGS" ]]; then
+    # Build JSON object with file associations
+    associations=$(
+        find . -maxdepth 1 -type f -perm +111 \
+            ! -name ".*" \
+            ! -name "LICENSE" \
+            ! -name "README*" \
+            ! -name "*.md" \
+            ! -name "*.txt" \
+            -exec basename {} \; 2>/dev/null | \
+        jq -R -s 'split("\n") | map(select(length > 0)) | 
+                  map({(.): "shellscript"}) | add // {}'
+    )
+    
+    # Update settings.json with new associations
+    if jq --argjson assoc "$associations" \
+        '.["files.associations"] = $assoc' \
+        "$VSCODE_SETTINGS" > "${VSCODE_SETTINGS}.tmp"; then
+        
+        # Check if file changed
+        if ! cmp -s "$VSCODE_SETTINGS" "${VSCODE_SETTINGS}.tmp"; then
+            mv "${VSCODE_SETTINGS}.tmp" "$VSCODE_SETTINGS"
+            git add "$VSCODE_SETTINGS"
+            echo "✅ Updated VSCode file associations"
+            made_changes=true
+        else
+            rm "${VSCODE_SETTINGS}.tmp"
+        fi
+    else
+        rm -f "${VSCODE_SETTINGS}.tmp"
+    fi
+fi
+
 if $made_changes; then
-    echo "✅ Auto-fixed script permissions"
+    echo "✅ Pre-commit fixes applied"
 fi
 
 exit 0

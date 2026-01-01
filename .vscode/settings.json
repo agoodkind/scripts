@@ -1,31 +1,33 @@
 {
-    "files.exclude": {
-        "**/.git": true,
-        "**/.svn": true,
-        "**/.hg": true,
-        "**/.DS_Store": true,
-        "**/Thumbs.db": true,
-        "**/CVS": true,
-        "**/.ruby-lsp": true,
-        "**/.retool_types/**": true,
-        "**/*tsconfig.json": true,
-        ".cache": true,
-        "retool.config.json": true
-    },
-    "files.associations": {
-        "*install-updater*": "shellscript",
-        "*uninstall-updater*": "shellscript",
-        "backup-*": "shellscript",
-        "bootstrap-*": "shellscript",
-        "change-*": "shellscript",
-        "check-*": "shellscript",
-        "prep-*": "shellscript",
-        "reapply-*": "shellscript",
-        "send-*": "shellscript",
-        "wan-*": "shellscript",
-        "*-sync": "shellscript",
-        "*-notify": "shellscript",
-        "*-cmd": "shellscript",
-        "screenshot": "shellscript"
-    }
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/CVS": true,
+    "**/.ruby-lsp": true,
+    "**/.retool_types/**": true,
+    "**/*tsconfig.json": true,
+    ".cache": true,
+    "retool.config.json": true
+  },
+  "files.associations": {
+    "install-updater": "shellscript",
+    "install-updater-mac": "shellscript",
+    "screenshot": "shellscript",
+    "uninstall-updater": "shellscript",
+    "upssched-cmd": "shellscript",
+    "ddclient-notify": "shellscript",
+    "prep-pve-ct": "shellscript",
+    "wan-monitor": "shellscript",
+    "check-3d06": "shellscript",
+    "uninstall-updater-mac": "shellscript",
+    "cf-lb-sync": "shellscript",
+    "change-proxmox-hostname": "shellscript",
+    "send-email": "shellscript",
+    "backup-vault-host": "shellscript",
+    "reapply-opnsense-changes": "shellscript",
+    "bootstrap-cert": "shellscript"
+  }
 }
