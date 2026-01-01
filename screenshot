@@ -6,19 +6,113 @@
 #   $ screenshot -w        # window mode (click a window)
 #   $ screenshot -x        # no sound
 #   $ screenshot -i -x     # interactive mode, no sound
+#   $ screenshot --native  # use macOS Screenshot UI (shows floating thumbnail)
 #
 # Default interactive mode: drag to select area, or spacebar+click for window
+
+set -euo pipefail
+
+function usage() {
+  cat <<'EOF'
+Usage:
+  screenshot [screencapture-args...]
+  screenshot --native
+  screenshot --native -i
+
+Examples:
+  screenshot
+  screenshot -w
+  screenshot -x
+  screenshot -i -x
+  screenshot --native
+  screenshot --native -i
+EOF
+}
+
+function copy_png_to_clipboard() {
+  local file_name="$1"
+
+  # This gnarly "«class PNGf»" incantation is for some reason necessary to copy
+  # the file as an image.
+  osascript -e \
+    "set the clipboard to (read (POSIX file \"${file_name}\") as «class PNGf»)"
+}
+
+function screenshot_location() {
+  local location=""
+
+  location="$(defaults read com.apple.screencapture location 2>/dev/null || true)"
+  if [ -n "$location" ] && [ -d "$location" ]; then
+    printf '%s\n' "$location"
+    return 0
+  fi
+
+  printf '%s\n' "$HOME/Desktop"
+}
+
+function open_native_screenshot() {
+  local key_code="$1"
+
+  osascript -e \
+    "tell application \"System Events\" to key code ${key_code} using {command down, shift down}"
+}
 
 # Construct a unique-ish filename like:
 # ~/Documents/Screenshots/screenshot-2024-03-16-16h43m48s.png
 isoTime=$(date +"%Y-%m-%d-%Hh%Mm%Ss")
 fileName="$HOME/Documents/Screenshots/screenshot-$isoTime.png"
 
-# Pass all CLI args to screencapture, defaulting to -i (interactive mode)
-# Examples: screenshot -w (window mode), screenshot -x (no sound)
-screencapture "${@:--i}" "$fileName"
+mkdir -p "$HOME/Documents/Screenshots"
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  usage
+  exit 0
+fi
+
+if [ "${1:-}" = "--native" ]; then
+  watch_dir="$(screenshot_location)"
+  marker="$(mktemp "${TMPDIR:-/tmp}/screenshot-marker.XXXXXX")"
+  rm -f "$marker"
+  touch "$marker"
+
+  if [ "${2:-}" = "" ]; then
+    # Cmd-Shift-3: full screen.
+    open_native_screenshot 20
+  elif [ "${2:-}" = "-i" ]; then
+    # Cmd-Shift-4: selection (spacebar for window).
+    open_native_screenshot 21
+  else
+    usage
+    exit 2
+  fi
+
+  latest=""
+  for ((i=0; i<600; i++)); do
+    latest="$(find "$watch_dir" -maxdepth 1 -type f -name '*.png' -newer "$marker" \
+      -print0 2>/dev/null | xargs -0 /bin/ls -1t 2>/dev/null | head -n 1 || true)"
+    if [ -n "$latest" ] && [ -f "$latest" ]; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  rm -f "$marker"
+
+  if [ -z "$latest" ] || [ ! -f "$latest" ]; then
+    exit 1
+  fi
+
+  if [ "$(dirname "$latest")" = "$HOME/Documents/Screenshots" ]; then
+    mv "$latest" "$fileName"
+  else
+    cp -p "$latest" "$fileName"
+  fi
+else
+  # Pass all CLI args to screencapture, defaulting to -i (interactive mode)
+  # Examples: screenshot -w (window mode), screenshot -x (no sound)
+  screencapture "${@:--i}" "$fileName"
+fi
 
 if [ -f "$fileName" ]; then
-  # This gnarly "«class PNGf»" incantation is for some reason necessary to copy the file
-  osascript -e "set the clipboard to (read (POSIX file \"${fileName}\") as «class PNGf»)"
+  copy_png_to_clipboard "$fileName"
 fi
