@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: ensure all scripts are executable
+#
+
+set -euo pipefail
+
+# Find script files (exclude metadata files)
+scripts=$(find . -maxdepth 1 -type f \
+    ! -name ".*" \
+    ! -name "LICENSE" \
+    ! -name "README*" \
+    ! -name "*.md" \
+    ! -name "*.txt" \
+    -print 2>/dev/null || true)
+
+# Track if we made any changes
+made_changes=false
+
+for script in $scripts; do
+    # Check if file is already executable
+    if [[ ! -x "$script" ]]; then
+        echo "Setting executable bit on: $script"
+        chmod +x "$script"
+        git add "$script"
+        made_changes=true
+    fi
+done
+
+if $made_changes; then
+    echo "✅ Auto-fixed script permissions"
+fi
+
+exit 0
