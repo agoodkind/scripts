@@ -51,6 +51,9 @@ setup_repo() {
         git clone "$SCRIPTS_REPO" "$SCRIPTS_DIR"
     fi
     chmod -R +x "$SCRIPTS_DIR"
+
+    sudo git config --system --add safe.directory "$SCRIPTS_DIR" \
+        2>/dev/null || true
 }
 
 # Remove old LaunchAgent if it exists
