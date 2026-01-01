@@ -59,12 +59,6 @@ setup_repo() {
         ! -name "*.md" \
         ! -name "*.txt" \
         -exec chmod +x {} \;
-    
-    # Ignore filemode changes in git
-    git -C "$SCRIPTS_DIR" config core.fileMode false
-    
-    # Use committed hooks from .githooks/
-    git -C "$SCRIPTS_DIR" config core.hooksPath .githooks
 
     sudo git config --system --add safe.directory "$SCRIPTS_DIR" \
         2>/dev/null || true
