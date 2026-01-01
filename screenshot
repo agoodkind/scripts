@@ -2,19 +2,21 @@
 
 # Usage:
 #
-#   $ screenshot
+#   $ screenshot           # interactive mode (default, same as -i)
+#   $ screenshot -w        # window mode (click a window)
+#   $ screenshot -x        # no sound
+#   $ screenshot -i -x     # interactive mode, no sound
 #
-# Then, either:
-#   - drag and release the mouse to select an area to screenshot
-#   - press spacebar and click the mouse to select the current window
+# Default interactive mode: drag to select area, or spacebar+click for window
 
 # Construct a unique-ish filename like:
 # ~/Documents/Screenshots/screenshot-2024-03-16-16h43m48s.png
 isoTime=$(date +"%Y-%m-%d-%Hh%Mm%Ss")
 fileName="$HOME/Documents/Screenshots/screenshot-$isoTime.png"
 
-# The -i will put the Screenshot app into interactive mode (like cmd-shift-4)
-screencapture -i "$fileName"
+# Pass all CLI args to screencapture, defaulting to -i (interactive mode)
+# Examples: screenshot -w (window mode), screenshot -x (no sound)
+screencapture "${@:--i}" "$fileName"
 
 if [ -f "$fileName" ]; then
   # This gnarly "«class PNGf»" incantation is for some reason necessary to copy the file
