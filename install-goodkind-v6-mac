@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Install launchd daemon for Goodkind IPv6 overlay setup on macOS
+
+set -euo pipefail
+
+SCRIPT_NAME="setup-goodkind-v6.sh"
+SERVICE_LABEL="io.goodkind.ipv6"
+DAEMON_PLIST="/Library/LaunchDaemons/${SERVICE_LABEL}.plist"
+SCRIPT_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE_PATH="${SCRIPT_SOURCE_DIR}/${SCRIPT_NAME}"
+SCRIPT_INSTALL_PATH="/usr/local/bin/${SCRIPT_NAME}"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log() { echo -e "${GREEN}[+]${NC} $1"; }
+warn() { echo -e "${YELLOW}[!]${NC} $1"; }
+error() { echo -e "${RED}[x]${NC} $1" >&2; exit 1; }
+
+check_macos() {
+    if [[ "$OSTYPE" != "darwin"* ]]; then
+        error "This installer is for macOS only."
+    fi
+}
+
+install_script() {
+    if [[ ! -f "$SCRIPT_SOURCE_PATH" ]]; then
+        error "Source script not found: $SCRIPT_SOURCE_PATH"
+    fi
+
+    log "Installing ${SCRIPT_NAME} to /usr/local/bin..."
+    sudo mkdir -p /usr/local/bin
+    sudo cp "$SCRIPT_SOURCE_PATH" "$SCRIPT_INSTALL_PATH"
+    sudo chmod 755 "$SCRIPT_INSTALL_PATH"
+}
+
+create_plist() {
+    log "Writing launchd plist to $DAEMON_PLIST..."
+    sudo tee "$DAEMON_PLIST" > /dev/null << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${SERVICE_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${SCRIPT_INSTALL_PATH}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>AbandonProcessGroup</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/goodkind-v6.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/goodkind-v6.log</string>
+</dict>
+</plist>
+EOF
+
+    sudo chown root:wheel "$DAEMON_PLIST"
+    sudo chmod 644 "$DAEMON_PLIST"
+}
+
+load_daemon() {
+    log "Loading launchd daemon ${SERVICE_LABEL}..."
+    sudo launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
+    if sudo launchctl load "$DAEMON_PLIST"; then
+        log "Daemon loaded successfully."
+    else
+        error "Failed to load daemon. See /var/log/goodkind-v6.log for details."
+    fi
+}
+
+main() {
+    check_macos
+    install_script
+    create_plist
+    load_daemon
+
+    echo
+    log "Install complete."
+    echo "  Check status:  sudo launchctl list | grep ${SERVICE_LABEL}"
+    echo "  Run now:       sudo launchctl start ${SERVICE_LABEL}"
+    echo "  View log:      sudo tail -f /var/log/goodkind-v6.log"
+}
+
+main "$@"
