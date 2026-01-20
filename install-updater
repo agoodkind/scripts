@@ -91,7 +91,7 @@ enable_timer() {
     systemctl start "${SERVICE_NAME}.timer"
 }
 
-# Add /opt/scripts to system PATH
+# Add /opt/scripts to system PATH (interactive shells)
 setup_path() {
     local profile_file="/etc/profile.d/opt-scripts.sh"
     if [[ ! -f "$profile_file" ]]; then
@@ -100,6 +100,25 @@ setup_path() {
         chmod 644 "$profile_file"
     else
         log "PATH already configured in $profile_file"
+    fi
+}
+
+# Add /opt/scripts to systemd PATH (non-TTY sessions)
+setup_systemd_path() {
+    local systemd_conf_dir="/etc/systemd/system.conf.d"
+    local path_conf="${systemd_conf_dir}/path.conf"
+    
+    mkdir -p "$systemd_conf_dir"
+    
+    if [[ ! -f "$path_conf" ]]; then
+        log "Adding /opt/scripts to systemd PATH..."
+        cat > "$path_conf" << 'EOF'
+[Manager]
+DefaultEnvironment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/opt/scripts"
+EOF
+        systemctl daemon-reload
+    else
+        log "systemd PATH already configured in $path_conf"
     fi
 }
 
@@ -112,6 +131,7 @@ main() {
     create_timer
     enable_timer
     setup_path
+    setup_systemd_path
     
     log "Installation complete!"
     log "Scripts installed to: $SCRIPTS_DIR"

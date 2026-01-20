@@ -1,0 +1,40 @@
+#!/bin/sh
+# IP address change notification script specifically for berylax
+# Usage: ip-notify [-4|-6]
+
+WAN_INTERFACE="eth0"
+EMAIL_TO="alex@goodkind.io"
+EMAIL_FROM="berylax@goodkind.io"
+
+case "$1" in
+    -4)
+        FAMILY="4"
+        STATE_FILE="/var/run/ipv4-address"
+        CURRENT_IP=$(ip -4 addr show "$WAN_INTERFACE" | grep "inet.*global" | awk "{print \$2}" | cut -d/ -f1 | head -1)
+        PROTOCOL="IPv4"
+        ;;
+    -6)
+        FAMILY="6"
+        STATE_FILE="/var/run/ipv6-address"
+        CURRENT_IP=$(ip -6 addr show "$WAN_INTERFACE" | grep "inet6.*global" | awk "{print \$2}" | cut -d/ -f1 | head -1)
+        PROTOCOL="IPv6"
+        ;;
+    *)
+        echo "Usage: $0 [-4|-6]"
+        exit 1
+        ;;
+esac
+
+if [ -z "$CURRENT_IP" ]; then
+    exit 0
+fi
+
+if [ -f "$STATE_FILE" ]; then
+    OLD_IP=$(cat "$STATE_FILE")
+    if [ "$OLD_IP" != "$CURRENT_IP" ]; then
+        /usr/local/bin/send-email -t "$EMAIL_TO" -s "$PROTOCOL Address Changed on berylax" -m "$PROTOCOL address changed\\n\\nOld: $OLD_IP\\nNew: $CURRENT_IP" -f "$EMAIL_FROM"
+        echo "$CURRENT_IP" > "$STATE_FILE"
+    fi
+else
+    echo "$CURRENT_IP" > "$STATE_FILE"
+fi
