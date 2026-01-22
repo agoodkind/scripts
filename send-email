@@ -1,217 +1,130 @@
 #!/usr/bin/env bash
-# Compact email sender with system info (multipart: plain + HTML)
-set -uo pipefail
+# Unified email sender: sendmail (default) or SMTP2GO HTTP API
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/email-formatting.sh"
 
 HOSTNAME=$(hostname)
 TO="" SUBJECT="" MSG="" FROM="" NAME="" CALLER=""
+METHOD="sendmail"  # Default method
+SMTP2GO_API_KEY=""
+BIND_IFACE=""
 
 die() { echo "Error: $1" >&2; exit 1; }
-usage() { echo "Usage: $0 -t TO -s SUBJ -m MSG [-f FROM] [-n NAME] [-c CALLER]"; exit 1; }
+usage() {
+    cat <<EOF
+Usage: $0 -t TO -s SUBJ -m MSG [OPTIONS]
 
-# --- System Info (cross-platform: macOS + Linux) ---
-is_macos() { [[ "$OSTYPE" == "darwin"* ]]; }
+Required:
+  -t TO         Recipient email address
+  -s SUBJECT    Email subject
+  -m MSG        Email message body
 
-get_uptime() {
-    if is_macos; then
-        local boot_time days hours mins
-        boot_time=$(sysctl -n kern.boottime | awk '{print $4}' | tr -d ',')
-        local now=$(date +%s)
-        local uptime_secs=$((now - boot_time))
-        days=$((uptime_secs / 86400))
-        hours=$(( (uptime_secs % 86400) / 3600 ))
-        mins=$(( (uptime_secs % 3600) / 60 ))
-        if ((days > 0)); then
-            printf "%d days, %d hours, %d minutes" "$days" "$hours" "$mins"
-        elif ((hours > 0)); then
-            printf "%d hours, %d minutes" "$hours" "$mins"
-        else
-            printf "%d minutes" "$mins"
-        fi
-    else
-        uptime -p 2>/dev/null | sed 's/up //' || uptime | awk '{print $3,$4}' | tr -d ','
-    fi
+Optional:
+  -f FROM       Sender email (default: ${HOSTNAME}-mailer@goodkind.io)
+  -n NAME       Sender name (default: $HOSTNAME)
+  -c CALLER     Caller name for metadata (auto-detected if not provided)
+  --http        Use SMTP2GO HTTP API instead of sendmail
+  -k API_KEY    SMTP2GO API key (required for --http)
+  -i IFACE      Bind to specific network interface (HTTP mode only)
+EOF
+    exit 1
 }
 
-get_load() {
-    if is_macos; then
-        sysctl -n vm.loadavg | awk '{print $2, $3, $4}'
-    else
-        uptime | awk -F'load average:' '{print $2}' | xargs
-    fi
-}
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -t) TO="$2"; shift 2 ;;
+        -s) SUBJECT="$2"; shift 2 ;;
+        -m) MSG="$2"; shift 2 ;;
+        -f) FROM="$2"; shift 2 ;;
+        -n) NAME="$2"; shift 2 ;;
+        -c) CALLER="$2"; shift 2 ;;
+        -k) SMTP2GO_API_KEY="$2"; shift 2 ;;
+        -i) BIND_IFACE="$2"; shift 2 ;;
+        --http) METHOD="http"; shift ;;
+        -h|--help) usage ;;
+        *)  usage ;;
+    esac
+done
 
-get_memory() {
-    if is_macos; then
-        local page_size=$(sysctl -n hw.pagesize)
-        local pages_free=$(vm_stat | awk '/Pages free:/{gsub(/\./,"",$3); print $3}')
-        local pages_active=$(vm_stat | awk '/Pages active:/{gsub(/\./,"",$3); print $3}')
-        local pages_inactive=$(vm_stat | awk '/Pages inactive:/{gsub(/\./,"",$3); print $3}')
-        local pages_wired=$(vm_stat | awk '/Pages wired down:/{gsub(/\./,"",$4); print $4}')
-        local pages_compressed=$(vm_stat | awk '/Pages stored in compressor:/{gsub(/\./,"",$5); print $5}')
-        local total_mem=$(sysctl -n hw.memsize)
-        local used=$((( pages_active + pages_wired + pages_compressed ) * page_size))
-        # Format in GB
-        local used_gb=$(echo "scale=1; $used / 1073741824" | bc)
-        local total_gb=$(echo "scale=1; $total_mem / 1073741824" | bc)
-        printf "%sG/%sG" "$used_gb" "$total_gb"
-    else
-        free -h 2>/dev/null | awk '/Mem:/{printf "%s/%s",$3,$2}'
-    fi
-}
+[[ -z "$TO" || -z "$SUBJECT" || -z "$MSG" ]] && die "Missing required arguments"
+[[ -z "$FROM" ]] && FROM="${HOSTNAME}-mailer@goodkind.io"
+[[ -z "$NAME" ]] && NAME="$HOSTNAME"
+[[ -z "$CALLER" ]] && CALLER=$(infer_caller)
 
-get_disk() { df -h / | awk 'NR==2{printf "%s/%s (%s)",$3,$2,$5}'; }
-
-# Race multiple URLs in parallel; first to complete wins
-fetch_race() {
-    local opts=$1
-    shift
-    local urls=("$@")
-    local tmps=() pids=()
-
-    for url in "${urls[@]}"; do
-        local t
-        t=$(mktemp)
-        tmps+=("$t")
-        # shellcheck disable=SC2086
-        curl $opts -sk --connect-timeout 3 --max-time 5 "$url" >"$t" \
-            2>/dev/null &
-        pids+=($!)
-    done
-
-    # Poll for first completed result
-    while true; do
-        local running=0
-        for i in "${!pids[@]}"; do
-            [[ -z "${pids[$i]}" ]] && continue
-
-            if kill -0 "${pids[$i]}" 2>/dev/null; then
-                running=$((running + 1))
-            else
-                if [[ -s "${tmps[$i]}" ]]; then
-                    tr -d '\r\n' <"${tmps[$i]}"
-                    # Kill remaining processes
-                    for j in "${!pids[@]}"; do
-                        [[ -n "${pids[$j]}" ]] && kill "${pids[$j]}" \
-                            2>/dev/null || true
-                    done
-                    rm -f "${tmps[@]}" 2>/dev/null
-                    return 0
-                fi
-                pids[$i]=""
+# Send via HTTP API
+send_http() {
+    # Try to get API key from environment if not provided
+    if [[ -z "$SMTP2GO_API_KEY" ]]; then
+        for env_file in /etc/mwan-watchdog/watchdog.env /etc/mwan/mwan.env; do
+            if [[ -r "$env_file" ]]; then
+                # shellcheck disable=SC1090
+                . "$env_file"
+                SMTP2GO_API_KEY="${SMTP2GO_API_KEY:-}"
+                [[ -n "$SMTP2GO_API_KEY" ]] && break
             fi
         done
+    fi
 
-        [[ $running -eq 0 ]] && break
-        sleep 0.01
-    done
+    [[ -z "$SMTP2GO_API_KEY" ]] && die "SMTP2GO_API_KEY required for HTTP method"
 
-    rm -f "${tmps[@]}" 2>/dev/null
-    echo "N/A"
-}
+    # Build curl command with optional interface binding
+    local curl_cmd="curl -sS --max-time 30"
+    if [[ -n "$BIND_IFACE" ]]; then
+        curl_cmd="$curl_cmd --interface $BIND_IFACE"
+    fi
 
-get_public_ip() {
-    local ver="$1"
-    fetch_race "-$ver" \
-        "ifconfig.co" \
-        "icanhazip.com" \
-        "api.ipify.org" \
-        "ifconfig.me"
-}
+    # Generate email bodies
+    local text_body html_body
+    text_body=$(render_plain "$MSG")
+    text_body+=$'\n\nCaller: '"$CALLER"$'\nHost: '"$HOSTNAME"$'\nTime: '"$(date +'%Y-%m-%d %H:%M %Z')"
+    html_body=$(render_html "$MSG" "$CALLER" "$HOSTNAME")
 
-get_isp() {
-    fetch_race "" \
-        "https://ifconfig.co/asn-org" \
-        "https://ipinfo.io/org" \
-        "http://ip-api.com/line/?fields=org"
-}
+    # Build JSON payload using jq for proper escaping
+    local payload
+    payload=$(jq -n \
+        --arg sender "$FROM" \
+        --arg to "$TO" \
+        --arg subject "$SUBJECT" \
+        --arg text_body "$text_body" \
+        --arg html_body "$html_body" \
+        --arg header_name "X-Sender-Name" \
+        --arg header_value "$NAME" \
+        '{
+            sender: $sender,
+            to: [$to],
+            subject: $subject,
+            text_body: $text_body,
+            html_body: $html_body,
+            custom_headers: [
+                {header: $header_name, value: $header_value}
+            ]
+        }')
 
-get_ips() {
-    local ver="$1"
-    if is_macos; then
-        if [[ "$ver" == "4" ]]; then
-            ifconfig 2>/dev/null | awk '
-                /^[a-z]/ { iface=$1; gsub(/:$/,"",iface) }
-                iface!="lo0" && /inet / && !/127\.0\.0\.1/ {
-                    print iface, $2
-                }'
-        else
-            ifconfig 2>/dev/null | awk '
-                /^[a-z]/ { iface=$1; gsub(/:$/,"",iface) }
-                iface!="lo0" && /inet6 / && !/fe80/ && !/::1/ {
-                    gsub(/%.*$/,"",$2); print iface, $2
-                }'
-        fi
+    # Send via API
+    local response
+    response=$(${curl_cmd} \
+        -X POST https://api.smtp2go.com/v3/email/send \
+        -H "Content-Type: application/json" \
+        -H "X-Smtp2go-Api-Key: $SMTP2GO_API_KEY" \
+        -d "$payload") || die "HTTP request failed"
+
+    # Check response
+    if echo "$response" | jq -e '.data.succeeded > 0' >/dev/null 2>&1; then
+        echo "Email sent to $TO via SMTP2GO HTTP API"
+        return 0
     else
-        ip -"$ver" -o addr 2>/dev/null | awk '
-            $2!="lo" && $4!~/^fe80/ {gsub(/\/.*/,"",$4); print $2,$4}'
+        local error_msg
+        error_msg=$(echo "$response" | jq -r '.data.error // "Unknown error"' 2>/dev/null || echo "Unknown error")
+        die "SMTP2GO API error: $error_msg"
     fi
 }
 
-infer_caller() {
-    local c
-    c=$(ps -p "$PPID" -o comm= 2>/dev/null || true)
-
-    if [[ "$c" =~ ^(bash|sh|zsh)$ ]]; then
-        local last_arg
-        last_arg=$(ps -p "$PPID" -o args= 2>/dev/null | awk '{print $NF}' || true)
-        last_arg="${last_arg#"${last_arg%%[![:space:]]*}"}"
-        last_arg="${last_arg%"${last_arg##*[![:space:]]}"}"
-        if [ -n "$last_arg" ]; then
-            c=$(basename "$last_arg")
-        fi
-    fi
-    echo "${c:-unknown}"
-}
-
-# --- Plain Text (message only - stats in HTML version) ---
-render_plain() {
-    echo -e "$MSG"
-}
-
-# --- HTML (message prominent, metadata as footer) ---
-render_html() {
-    # Use full message as preheader, pad with whitespace to prevent stats showing
-    local preheader_text
-    preheader_text=$(echo -e "$MSG" | tr '\n' ' ')
-    local padding=""
-    for _ in {1..100}; do padding+="&nbsp;&zwnj;"; done
-    
-    cat <<EOF
-<!DOCTYPE html><html><head><style>
-body{font:14px -apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0}
-.meta{margin-top:16px;padding-top:12px;border-top:1px solid rgba(128,128,128,0.2);
-font-size:11px;opacity:0.6}
-.meta table{border-collapse:collapse}
-.meta td{padding:1px 0}
-.meta .k{padding-right:12px;opacity:0.7}
-</style></head><body>
-<!-- Preheader text for email preview -->
-<div style="display:none;font-size:1px;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;mso-hide:all;font-family:sans-serif;">
-${preheader_text}${padding}
-</div>
-<div>$(echo -e "$MSG" | sed 's/$/<br>/')</div>
-<div class="meta">
-<table>
-<tr><td class="k">Caller</td><td>$CALLER</td></tr>
-<tr><td class="k">Time</td><td>$(date +'%Y-%m-%d %H:%M %Z')</td></tr>
-<tr><td class="k">Host</td><td>$HOSTNAME</td></tr>
-<tr><td class="k">Uptime</td><td>$(get_uptime)</td></tr>
-<tr><td class="k">Load</td><td>$(get_load)</td></tr>
-<tr><td class="k">Memory</td><td>$(get_memory)</td></tr>
-<tr><td class="k">Disk</td><td>$(get_disk)</td></tr>
-<tr><td class="k">Public IPv4</td><td>$(get_public_ip 4)</td></tr>
-<tr><td class="k">Public IPv6</td><td>$(get_public_ip 6)</td></tr>
-<tr><td class="k">ISP</td><td>$(get_isp)</td></tr>
-$(get_ips 4 | while read -r i ip; do echo "<tr><td class=\"k\">$i</td><td>$ip</td></tr>"; done)
-$(get_ips 6 | while read -r i ip; do echo "<tr><td class=\"k\">$i</td><td>$ip</td></tr>"; done)
-</table>
-</div>
-</body></html>
-EOF
-}
-
-# --- Send multipart email ---
-send_email() {
+# Send via sendmail
+send_sendmail() {
     local from_header="\"$NAME\" <$FROM>"
     local boundary="----=_Part_$(date +%s)_$$"
 
@@ -226,42 +139,27 @@ send_email() {
             echo "--$boundary"
             echo "Content-Type: text/plain; charset=UTF-8"
             echo ""
-            render_plain
+            render_plain "$MSG"
             echo ""
             echo "--$boundary"
             echo "Content-Type: text/html; charset=UTF-8"
             echo ""
-            render_html
+            render_html "$MSG" "$CALLER" "$HOSTNAME"
             echo ""
             echo "--$boundary--"
         } | sendmail -t -f "$FROM"
+        echo "Email sent to $TO via sendmail"
     elif command -v mail >/dev/null 2>&1; then
-        render_plain | mail -s "$SUBJECT" -a "From: $from_header" "$TO"
+        render_plain "$MSG" | mail -s "$SUBJECT" -a "From: $from_header" "$TO"
+        echo "Email sent to $TO via mail"
     else
         die "No mail command found (sendmail or mail)"
     fi
 }
 
-# --- Main ---
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -t) TO="$2"; shift 2 ;;
-        -s) SUBJECT="$2"; shift 2 ;;
-        -m) MSG="$2"; shift 2 ;;
-        -f) FROM="$2"; shift 2 ;;
-        -n) NAME="$2"; shift 2 ;;
-        -c) CALLER="$2"; shift 2 ;;
-        *)  usage ;;
-    esac
-done
-
-[[ -z "$TO" || -z "$MSG" ]] && { usage; die "Missing required arguments"; }
-[[ -z "$FROM" ]] && FROM="${HOSTNAME}-mailer@goodkind.io"
-[[ -z "$NAME" ]] && NAME="$HOSTNAME"
-[[ -z "$CALLER" ]] && CALLER=$(infer_caller)
-
-if send_email; then
-    echo "Email sent to $TO"
+# Main
+if [[ "$METHOD" == "http" ]]; then
+    send_http
 else
-    die "Failed"
+    send_sendmail
 fi
