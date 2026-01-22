@@ -131,6 +131,7 @@ setup_path_linux() {
     local profile_file="/etc/profile.d/opt-scripts.sh"
     if [[ ! -f "$profile_file" ]]; then
         log "Adding /opt/scripts to system PATH..."
+        # shellcheck disable=SC2016
         echo 'export PATH="/opt/scripts:$PATH"' > "$profile_file"
         chmod 644 "$profile_file"
     else
