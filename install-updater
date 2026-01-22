@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 #
-# Install systemd timer to auto-update /opt/scripts from git
-# Only works on Debian/Ubuntu systems with systemd
+# Install auto-updater for /opt/scripts or /usr/local/opt/scripts
+# Supports both systemd (Linux) and launchd (macOS)
 #
 
 set -euo pipefail
 
 SCRIPTS_REPO="https://github.com/agoodkind/scripts.git"
-SCRIPTS_DIR="/opt/scripts"
-SERVICE_NAME="scripts-updater"
 
 # Colors
 RED='\033[0;31m'
@@ -20,25 +18,66 @@ log() { echo -e "${GREEN}[+]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[x]${NC} $1" >&2; exit 1; }
 
-# Check if running on systemd-based system
+usage() {
+    cat << EOF
+Usage: $(basename "$0") --platform <linux|macos>
+
+Install auto-updater for scripts repository.
+
+Options:
+    --platform linux     Install systemd-based updater (Linux)
+    --platform macos     Install launchd-based updater (macOS)
+    -h, --help           Show this help message
+
+Examples:
+    $(basename "$0") --platform linux
+    $(basename "$0") --platform macos
+EOF
+    exit 0
+}
+
+# ============================================================================
+# Linux (systemd) Installation
+# ============================================================================
+
+install_linux() {
+    SCRIPTS_DIR="/opt/scripts"
+    SERVICE_NAME="scripts-updater"
+    
+    log "Installing scripts-updater for Linux (systemd)..."
+    check_systemd
+    check_root
+    setup_repo_linux
+    create_systemd_service
+    create_systemd_timer
+    enable_systemd_timer
+    setup_path_linux
+    setup_systemd_path
+    
+    log "Installation complete!"
+    log "Scripts installed to: $SCRIPTS_DIR"
+    log "Timer status: systemctl status ${SERVICE_NAME}.timer"
+    log "Run manually: systemctl start ${SERVICE_NAME}.service"
+    log "Log out and back in for PATH update"
+}
+
 check_systemd() {
     if ! command -v systemctl &>/dev/null; then
-        error "systemctl not found. This script requires systemd."
+        error "systemctl not found. This requires systemd."
     fi
 }
 
-# Check for root/sudo
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         error "This script must be run as root or with sudo"
     fi
 }
 
-# Clone or update the scripts repo
-setup_repo() {
+setup_repo_linux() {
     if [[ -d "$SCRIPTS_DIR/.git" ]]; then
         log "Scripts repo already exists, pulling latest..."
-        git -C "$SCRIPTS_DIR" pull --ff-only || warn "Pull failed, continuing with existing version"
+        git -C "$SCRIPTS_DIR" pull --ff-only || \
+            warn "Pull failed, continuing with existing version"
     else
         if [[ -d "$SCRIPTS_DIR" ]]; then
             warn "Removing existing $SCRIPTS_DIR (not a git repo)"
@@ -50,8 +89,7 @@ setup_repo() {
     chmod -R +x "$SCRIPTS_DIR"
 }
 
-# Create systemd service
-create_service() {
+create_systemd_service() {
     log "Creating systemd service..."
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << 'EOF'
 [Unit]
@@ -66,8 +104,7 @@ TimeoutStartSec=300
 EOF
 }
 
-# Create systemd timer
-create_timer() {
+create_systemd_timer() {
     log "Creating systemd timer..."
     cat > "/etc/systemd/system/${SERVICE_NAME}.timer" << 'EOF'
 [Unit]
@@ -83,16 +120,14 @@ WantedBy=timers.target
 EOF
 }
 
-# Enable and start the timer
-enable_timer() {
+enable_systemd_timer() {
     log "Enabling and starting timer..."
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}.timer"
     systemctl start "${SERVICE_NAME}.timer"
 }
 
-# Add /opt/scripts to system PATH (interactive shells)
-setup_path() {
+setup_path_linux() {
     local profile_file="/etc/profile.d/opt-scripts.sh"
     if [[ ! -f "$profile_file" ]]; then
         log "Adding /opt/scripts to system PATH..."
@@ -103,7 +138,6 @@ setup_path() {
     fi
 }
 
-# Add /opt/scripts to systemd PATH (non-TTY sessions)
 setup_systemd_path() {
     local systemd_conf_dir="/etc/systemd/system.conf.d"
     local path_conf="${systemd_conf_dir}/path.conf"
@@ -122,23 +156,203 @@ EOF
     fi
 }
 
-main() {
-    log "Installing scripts-updater..."
-    check_systemd
-    check_root
-    setup_repo
-    create_service
-    create_timer
-    enable_timer
-    setup_path
-    setup_systemd_path
+# ============================================================================
+# macOS (launchd) Installation
+# ============================================================================
+
+install_macos() {
+    SCRIPTS_DIR="/usr/local/opt/scripts"
+    DAEMON_NAME="com.agoodkind.scripts-updater"
+    DAEMON_PLIST="/Library/LaunchDaemons/${DAEMON_NAME}.plist"
+    OLD_AGENT_PLIST="$HOME/Library/LaunchAgents/${DAEMON_NAME}.plist"
     
-    log "Installation complete!"
-    log "Scripts installed to: $SCRIPTS_DIR"
-    log "Timer status: systemctl status ${SERVICE_NAME}.timer"
-    log "Run manually: systemctl start ${SERVICE_NAME}.service"
-    log "Log out and back in (or source /etc/profile.d/opt-scripts.sh) for PATH update"
+    log "Installing scripts-updater for macOS (LaunchDaemon)..."
+    check_macos
+    cleanup_old_agent
+    setup_repo_macos
+    create_launchd_daemon
+    load_launchd_daemon
+    setup_path_macos
+    create_symlinks
+    show_macos_status
 }
 
-main "$@"
+check_macos() {
+    if [[ "$OSTYPE" != "darwin"* ]]; then
+        error "This platform requires macOS. Use --platform linux instead."
+    fi
+}
 
+setup_repo_macos() {
+    if [[ ! -d "/usr/local/opt" ]]; then
+        log "Creating /usr/local/opt..."
+        sudo mkdir -p /usr/local/opt
+        sudo chown "$USER" /usr/local/opt
+    fi
+    
+    if [[ -d "$SCRIPTS_DIR/.git" ]]; then
+        log "Scripts repo already exists, pulling latest..."
+        git -C "$SCRIPTS_DIR" pull --ff-only || warn "Pull failed, continuing"
+    else
+        if [[ -d "$SCRIPTS_DIR" ]]; then
+            warn "Removing existing $SCRIPTS_DIR (not a git repo)"
+            rm -rf "$SCRIPTS_DIR"
+        fi
+        log "Cloning scripts repo to $SCRIPTS_DIR..."
+        git clone "$SCRIPTS_REPO" "$SCRIPTS_DIR"
+    fi
+
+    sudo git config --system --add safe.directory "$SCRIPTS_DIR" \
+        2>/dev/null || true
+}
+
+cleanup_old_agent() {
+    if [[ -f "$OLD_AGENT_PLIST" ]]; then
+        log "Removing old LaunchAgent..."
+        launchctl unload "$OLD_AGENT_PLIST" 2>/dev/null || true
+        launchctl bootout "gui/$(id -u)/${DAEMON_NAME}" 2>/dev/null || true
+        rm -f "$OLD_AGENT_PLIST"
+    fi
+}
+
+create_launchd_daemon() {
+    log "Creating launchd daemon..."
+    
+    sudo tee "$DAEMON_PLIST" > /dev/null << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${DAEMON_NAME}</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/git</string>
+        <string>-C</string>
+        <string>${SCRIPTS_DIR}</string>
+        <string>pull</string>
+        <string>--ff-only</string>
+    </array>
+    
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>StandardOutPath</key>
+    <string>/var/log/scripts-updater.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/scripts-updater.log</string>
+</dict>
+</plist>
+EOF
+    
+    sudo chown root:wheel "$DAEMON_PLIST"
+    sudo chmod 644 "$DAEMON_PLIST"
+}
+
+load_launchd_daemon() {
+    log "Loading launchd daemon..."
+    
+    sudo launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
+    
+    if sudo launchctl load "$DAEMON_PLIST"; then
+        log "Daemon loaded successfully"
+    else
+        error "Failed to load daemon"
+    fi
+}
+
+setup_path_macos() {
+    local profile_file="/etc/paths.d/scripts"
+    if [[ ! -f "$profile_file" ]]; then
+        log "Adding $SCRIPTS_DIR to system PATH..."
+        echo "$SCRIPTS_DIR" | sudo tee "$profile_file" > /dev/null
+    else
+        log "PATH already configured in $profile_file"
+    fi
+}
+
+create_symlinks() {
+    log "Creating symlinks in /usr/local/bin..."
+    
+    [[ -d "/usr/local/bin" ]] || sudo mkdir -p /usr/local/bin
+    
+    local script
+    for script in "$SCRIPTS_DIR"/*; do
+        [[ -f "$script" ]] || continue
+        [[ -x "$script" ]] || continue
+        
+        local name
+        name=$(basename "$script")
+        
+        case "$name" in
+            LICENSE|README*|*.md|*.txt|.*) continue ;;
+        esac
+        
+        local target="/usr/local/bin/$name"
+        if [[ -L "$target" ]] && \
+            [[ "$(readlink "$target")" == "$script" ]]; then
+            continue
+        fi
+        
+        sudo ln -sf "$script" "$target"
+        log "  Linked: $name"
+    done
+}
+
+show_macos_status() {
+    echo ""
+    log "Installation complete!"
+    log "Scripts installed to: $SCRIPTS_DIR"
+    log "LaunchDaemon: $DAEMON_PLIST"
+    echo ""
+    log "Useful commands:"
+    echo "  Check status:  sudo launchctl list | grep ${DAEMON_NAME}"
+    echo "  Run now:       sudo launchctl start ${DAEMON_NAME}"
+    echo "  View log:      cat /var/log/scripts-updater.log"
+    echo "  Unload:        sudo launchctl unload $DAEMON_PLIST"
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+PLATFORM=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --platform)
+            PLATFORM="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            error "Unknown option: $1. Use --help for usage."
+            ;;
+    esac
+done
+
+if [[ -z "$PLATFORM" ]]; then
+    error "Missing required --platform flag. Use --help for usage."
+fi
+
+case "$PLATFORM" in
+    linux)
+        install_linux
+        ;;
+    macos)
+        install_macos
+        ;;
+    *)
+        error "Invalid platform: $PLATFORM. Must be 'linux' or 'macos'."
+        ;;
+esac

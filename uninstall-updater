@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 #
-# Uninstall systemd timer for /opt/scripts auto-updates
-# Optionally removes /opt/scripts directory
+# Uninstall auto-updater for scripts
+# Supports both systemd (Linux) and launchd (macOS)
 #
 
 set -euo pipefail
-
-SERVICE_NAME="scripts-updater"
-SCRIPTS_DIR="/opt/scripts"
 
 # Colors
 RED='\033[0;31m'
@@ -19,15 +16,56 @@ log() { echo -e "${GREEN}[+]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[x]${NC} $1" >&2; exit 1; }
 
-# Check for root/sudo
+usage() {
+    cat << EOF
+Usage: $(basename "$0") --platform <linux|macos> [OPTIONS]
+
+Uninstall auto-updater for scripts repository.
+
+Options:
+    --platform linux     Uninstall systemd-based updater (Linux)
+    --platform macos     Uninstall launchd-based updater (macOS)
+    --purge              Also remove scripts directory (Linux)
+    --remove-scripts     Also remove scripts directory (macOS)
+    -h, --help           Show this help message
+
+Examples:
+    $(basename "$0") --platform linux
+    $(basename "$0") --platform linux --purge
+    $(basename "$0") --platform macos
+    $(basename "$0") --platform macos --remove-scripts
+EOF
+    exit 0
+}
+
+# ============================================================================
+# Linux (systemd) Uninstallation
+# ============================================================================
+
+uninstall_linux() {
+    SERVICE_NAME="scripts-updater"
+    SCRIPTS_DIR="/opt/scripts"
+    
+    log "Uninstalling scripts-updater for Linux (systemd)..."
+    check_root
+    disable_systemd_timer
+    remove_systemd_files
+    remove_path_linux
+    remove_systemd_path
+    remove_scripts_linux
+    
+    log "Uninstallation complete!"
+    [[ "$PURGE_FLAG" != "--purge" ]] && \
+        log "Scripts still available at: $SCRIPTS_DIR"
+}
+
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         error "This script must be run as root or with sudo"
     fi
 }
 
-# Stop and disable the timer
-disable_timer() {
+disable_systemd_timer() {
     if systemctl is-active "${SERVICE_NAME}.timer" &>/dev/null; then
         log "Stopping timer..."
         systemctl stop "${SERVICE_NAME}.timer"
@@ -39,7 +77,6 @@ disable_timer() {
     fi
 }
 
-# Remove systemd files
 remove_systemd_files() {
     local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
     local timer_file="/etc/systemd/system/${SERVICE_NAME}.timer"
@@ -57,8 +94,7 @@ remove_systemd_files() {
     systemctl daemon-reload
 }
 
-# Remove PATH configuration
-remove_path() {
+remove_path_linux() {
     local profile_file="/etc/profile.d/opt-scripts.sh"
     if [[ -f "$profile_file" ]]; then
         log "Removing PATH configuration..."
@@ -66,10 +102,20 @@ remove_path() {
     fi
 }
 
-# Optionally remove scripts directory
-remove_scripts() {
+remove_systemd_path() {
+    local systemd_conf_dir="/etc/systemd/system.conf.d"
+    local path_conf="${systemd_conf_dir}/path.conf"
+    
+    if [[ -f "$path_conf" ]]; then
+        log "Removing systemd PATH configuration..."
+        rm -f "$path_conf"
+        systemctl daemon-reload
+    fi
+}
+
+remove_scripts_linux() {
     if [[ -d "$SCRIPTS_DIR" ]]; then
-        if [[ "${1:-}" == "--purge" ]]; then
+        if [[ "$PURGE_FLAG" == "--purge" ]]; then
             log "Removing $SCRIPTS_DIR..."
             rm -rf "$SCRIPTS_DIR"
         else
@@ -78,19 +124,76 @@ remove_scripts() {
     fi
 }
 
-main() {
-    local purge="${1:-}"
+# ============================================================================
+# macOS (launchd) Uninstallation
+# ============================================================================
+
+uninstall_macos() {
+    SCRIPTS_DIR="/usr/local/opt/scripts"
+    DAEMON_NAME="com.agoodkind.scripts-updater"
+    DAEMON_PLIST="/Library/LaunchDaemons/${DAEMON_NAME}.plist"
+    OLD_AGENT_PLIST="$HOME/Library/LaunchAgents/${DAEMON_NAME}.plist"
     
-    log "Uninstalling scripts-updater..."
-    check_root
-    disable_timer
-    remove_systemd_files
-    remove_path
-    remove_scripts "$purge"
+    log "Uninstalling scripts-updater for macOS (launchd)..."
+    remove_symlinks
+    unload_daemon
+    remove_path_macos
+    remove_scripts_macos
     
-    log "Uninstallation complete!"
-    [[ "$purge" != "--purge" ]] && log "Scripts still available at: $SCRIPTS_DIR"
+    log "Uninstall complete!"
 }
 
-main "$@"
+remove_symlinks() {
+    log "Removing symlinks from /usr/local/bin..."
+    
+    if [[ -d "$SCRIPTS_DIR" ]]; then
+        local script
+        for script in "$SCRIPTS_DIR"/*; do
+            [[ -f "$script" ]] || continue
+            local name
+            name=$(basename "$script")
+            local target="/usr/local/bin/$name"
+            
+            if [[ -L "$target" ]] && \
+                [[ "$(readlink "$target")" == "$script" ]]; then
+                sudo rm "$target"
+                log "  Removed: $name"
+            fi
+        done
+    fi
+}
 
+unload_daemon() {
+    log "Unloading launchd daemon..."
+    
+    sudo launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
+    if [[ -f "$DAEMON_PLIST" ]]; then
+        sudo rm "$DAEMON_PLIST"
+        log "Removed: $DAEMON_PLIST"
+    fi
+    
+    if [[ -f "$OLD_AGENT_PLIST" ]]; then
+        launchctl unload "$OLD_AGENT_PLIST" 2>/dev/null || true
+        rm "$OLD_AGENT_PLIST"
+        log "Removed old LaunchAgent: $OLD_AGENT_PLIST"
+    fi
+}
+
+remove_path_macos() {
+    local profile_file="/etc/paths.d/scripts"
+    if [[ -f "$profile_file" ]]; then
+        log "Removing PATH entry..."
+        sudo rm "$profile_file"
+    fi
+}
+
+remove_scripts_macos() {
+    if [[ -d "$SCRIPTS_DIR" ]]; then
+        if [[ "$PURGE_FLAG" == "--remove-scripts" ]]; then
+            log "Removing scripts repo..."
+            rm -rf "$SCRIPTS_DIR"
+        else
+            warn "Keeping $SCRIPTS_DIR (use --remove-scripts to remove)"
+        fi
+    fi
+}
