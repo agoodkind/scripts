@@ -105,7 +105,7 @@ JSON
     local priority="user.info"
     [ "$level" = "error" ] && priority="user.error"
     [ "$level" = "warning" ] && priority="user.warning"
-    
+
     logger -t cf-lb-sync -p "$priority" "$level: $action - $message"
     logger -t cf-lb-sync -p "$priority" "  outcome=$outcome"
     logger -t cf-lb-sync -p "$priority" "  source=$SOURCE_RECORD -> target=$TARGET_RECORD"
@@ -121,7 +121,7 @@ JSON
       | curl -s -X POST -H "Content-Type: application/json" \
         -w "\n%{http_code}" \
         -d @- "http://$LOGSTASH_HOST:$LOGSTASH_PORT" 2>&1) || true
-    
+
     http_code=$(echo "$curl_output" | tail -n1)
     if [ -z "$http_code" ] || [ "$http_code" -lt 200 ] \
        || [ "$http_code" -ge 300 ]; then
@@ -133,7 +133,7 @@ JSON
 is_valid_ipv4() {
     local ip=$1
     [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-    
+
     local IFS='.'
     local -a octets=($ip)
     for octet in "${octets[@]}"; do
@@ -154,7 +154,7 @@ query_cloudflare() {
     local record=$1
     local type=$2
     local nameserver=$3
-    
+
     dig +short "$record" "@$nameserver" "$type" | head -1
 }
 
@@ -162,7 +162,7 @@ query_cloudflare() {
 query_bind() {
     local record=$1
     local type=$2
-    
+
     dig +short "$record" @localhost "$type" | head -1
 }
 
@@ -200,7 +200,7 @@ while true; do
     # Compare Cloudflare and BIND records - update if different
     if [ "$NEW_IP" != "$CURRENT_IP" ] \
        || [ "$NEW_IPV6" != "$CURRENT_IPV6" ]; then
-        
+
         # Log the detected change with old/new comparison
         log_to_logstash "info" "record_changed" \
             "$NEW_IP" "$NEW_IPV6" \

@@ -19,14 +19,14 @@ else
     echo "   Applying change..."
     # Backup the file
     cp /usr/local/etc/inc/interfaces.inc /usr/local/etc/inc/interfaces.inc.backup.$(date +%Y%m%d_%H%M%S)
-    
+
     # Find and replace the dhclient line, adding -b flag and comment
     sed -i '' "/mwexecf('\/sbin\/dhclient -c %s -p %s %s'/i\\
     /* AGOODKINDCUSTOM Dhclient backgrounding on boot so pending WPA_supplicant doesnt hang */
 " /usr/local/etc/inc/interfaces.inc
-    
+
     sed -i '' "s|mwexecf('/sbin/dhclient -c %s -p %s %s'|mwexecf('/sbin/dhclient -b -c %s -p %s %s'|" /usr/local/etc/inc/interfaces.inc
-    
+
     if grep -q "AGOODKINDCUSTOM Dhclient backgrounding on boot" /usr/local/etc/inc/interfaces.inc && \
        grep -q "dhclient -b -c" /usr/local/etc/inc/interfaces.inc; then
         echo "   ✓ Successfully applied"
@@ -47,7 +47,7 @@ if [ -f "/usr/local/etc/inc/plugins.inc.d/radvd.inc" ]; then
         echo "   Applying change..."
         # Backup the file
         cp /usr/local/etc/inc/plugins.inc.d/radvd.inc /usr/local/etc/inc/plugins.inc.d/radvd.inc.backup.$(date +%Y%m%d_%H%M%S)
-        
+
         # Use awk to insert the code
         awk '
         /Generated RADVD config for manual assignment/ {
@@ -66,13 +66,13 @@ if [ -f "/usr/local/etc/inc/plugins.inc.d/radvd.inc" ]; then
             inserted = 1
         }
         ' /usr/local/etc/inc/plugins.inc.d/radvd.inc > /tmp/radvd.inc.tmp
-        
+
         if [ -s /tmp/radvd.inc.tmp ]; then
             mv /tmp/radvd.inc.tmp /usr/local/etc/inc/plugins.inc.d/radvd.inc
         else
             echo "   ✗ Awk produced empty file, not applying"
         fi
-        
+
         if grep -q "AGOODKINDCUSTOM: Add hardcoded PREF64 for vlan064" /usr/local/etc/inc/plugins.inc.d/radvd.inc; then
             echo "   ✓ Successfully applied"
         else
@@ -108,7 +108,7 @@ chmod +x /conf/rm-bad-slaac-webpass.sh
 echo "   ✓ Created /conf/rm-bad-slaac-webpass.sh"
 
 # Create dhcp6c_wan_wrapper.sh
-# Note: This assumes the interface logical name is 'wan'. 
+# Note: This assumes the interface logical name is 'wan'.
 # If using a different interface (e.g., opt1, opt2), adjust the script path accordingly.
 cat > /conf/dhcp6c_wan_wrapper.sh << 'EOF'
 #!/usr/bin/env sh

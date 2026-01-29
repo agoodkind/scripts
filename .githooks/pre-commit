@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+# Run pre-commit framework first (gitleaks, etc.)
+if command -v pre-commit &>/dev/null && [[ -f .pre-commit-config.yaml ]]; then
+    pre-commit run --hook-stage pre-commit
+fi
+
 VSCODE_SETTINGS=".vscode/settings.json"
 
 # Find script files (exclude metadata)
@@ -37,7 +42,7 @@ done < <(find_scripts)
 if [[ -f "$VSCODE_SETTINGS" ]]; then
     # Get list of executable scripts (basenames only)
     script_names=$(find_scripts "-perm +111" | xargs -n1 basename)
-    
+
     # Build JSON object: {"script1": "shellscript", "script2": "shellscript", ...}
     associations=$(
         echo "$script_names" | \
@@ -48,7 +53,7 @@ if [[ -f "$VSCODE_SETTINGS" ]]; then
             add // {}
         '
     )
-    
+
     # Update settings.json with new file associations
     if jq --argjson assoc "$associations" \
         '.["files.associations"] = $assoc' \

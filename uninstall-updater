@@ -45,7 +45,7 @@ EOF
 uninstall_linux() {
     SERVICE_NAME="scripts-updater"
     SCRIPTS_DIR="/opt/scripts"
-    
+
     log "Uninstalling scripts-updater for Linux (systemd)..."
     check_root
     disable_systemd_timer
@@ -53,7 +53,7 @@ uninstall_linux() {
     remove_path_linux
     remove_systemd_path
     remove_scripts_linux
-    
+
     log "Uninstallation complete!"
     [[ "$PURGE_FLAG" != "--purge" ]] && \
         log "Scripts still available at: $SCRIPTS_DIR"
@@ -70,7 +70,7 @@ disable_systemd_timer() {
         log "Stopping timer..."
         systemctl stop "${SERVICE_NAME}.timer"
     fi
-    
+
     if systemctl is-enabled "${SERVICE_NAME}.timer" &>/dev/null; then
         log "Disabling timer..."
         systemctl disable "${SERVICE_NAME}.timer"
@@ -80,17 +80,17 @@ disable_systemd_timer() {
 remove_systemd_files() {
     local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
     local timer_file="/etc/systemd/system/${SERVICE_NAME}.timer"
-    
+
     if [[ -f "$service_file" ]]; then
         log "Removing service file..."
         rm -f "$service_file"
     fi
-    
+
     if [[ -f "$timer_file" ]]; then
         log "Removing timer file..."
         rm -f "$timer_file"
     fi
-    
+
     systemctl daemon-reload
 }
 
@@ -105,7 +105,7 @@ remove_path_linux() {
 remove_systemd_path() {
     local systemd_conf_dir="/etc/systemd/system.conf.d"
     local path_conf="${systemd_conf_dir}/path.conf"
-    
+
     if [[ -f "$path_conf" ]]; then
         log "Removing systemd PATH configuration..."
         rm -f "$path_conf"
@@ -133,19 +133,19 @@ uninstall_macos() {
     DAEMON_NAME="com.agoodkind.scripts-updater"
     DAEMON_PLIST="/Library/LaunchDaemons/${DAEMON_NAME}.plist"
     OLD_AGENT_PLIST="$HOME/Library/LaunchAgents/${DAEMON_NAME}.plist"
-    
+
     log "Uninstalling scripts-updater for macOS (launchd)..."
     remove_symlinks
     unload_daemon
     remove_path_macos
     remove_scripts_macos
-    
+
     log "Uninstall complete!"
 }
 
 remove_symlinks() {
     log "Removing symlinks from /usr/local/bin..."
-    
+
     if [[ -d "$SCRIPTS_DIR" ]]; then
         local script
         for script in "$SCRIPTS_DIR"/*; do
@@ -153,7 +153,7 @@ remove_symlinks() {
             local name
             name=$(basename "$script")
             local target="/usr/local/bin/$name"
-            
+
             if [[ -L "$target" ]] && \
                 [[ "$(readlink "$target")" == "$script" ]]; then
                 sudo rm "$target"
@@ -165,13 +165,13 @@ remove_symlinks() {
 
 unload_daemon() {
     log "Unloading launchd daemon..."
-    
+
     sudo launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
     if [[ -f "$DAEMON_PLIST" ]]; then
         sudo rm "$DAEMON_PLIST"
         log "Removed: $DAEMON_PLIST"
     fi
-    
+
     if [[ -f "$OLD_AGENT_PLIST" ]]; then
         launchctl unload "$OLD_AGENT_PLIST" 2>/dev/null || true
         rm "$OLD_AGENT_PLIST"
@@ -196,13 +196,9 @@ remove_scripts_macos() {
             warn "Keeping $SCRIPTS_DIR (use --remove-scripts to remove)"
         fi
     fi
-}
-
-# ============================================================================
+}# ============================================================================
 # Main
-# ============================================================================
-
-PLATFORM=""
+# ============================================================================PLATFORM=""
 PURGE_FLAG=""
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -221,13 +217,9 @@ while [[ $# -gt 0 ]]; do
             error "Unknown option: $1. Use --help for usage."
             ;;
     esac
-done
-
-if [[ -z "$PLATFORM" ]]; then
+doneif [[ -z "$PLATFORM" ]]; then
     error "Missing required --platform flag. Use --help for usage."
-fi
-
-case "$PLATFORM" in
+ficase "$PLATFORM" in
     linux)
         uninstall_linux
         ;;

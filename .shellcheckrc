@@ -12,4 +12,3 @@ disable=SC1090,SC1091,SC2155
 # Optional: Set source paths (where shellcheck should look for sourced files)
 # Relative to the file being checked
 source-path=SCRIPTDIR
-

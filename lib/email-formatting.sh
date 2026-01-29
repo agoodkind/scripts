@@ -165,12 +165,12 @@ render_html() {
     local msg="$1"
     local caller="${2:-unknown}"
     local hostname="${3:-$(hostname)}"
-    
+
     local preheader_text
     preheader_text=$(echo -e "$msg" | tr '\n' ' ')
     local padding=""
     for _ in {1..100}; do padding+="&nbsp;&zwnj;"; done
-    
+
     cat <<EOF
 <!DOCTYPE html><html><head><style>
 body{font:14px -apple-system,BlinkMacSystemFont,Arial,sans-serif;margin:0}

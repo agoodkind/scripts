@@ -60,7 +60,7 @@ fi
 (
     # Wait for network stack to settle
     sleep 5
-    
+
     MAX_RETRIES=30
     COUNT=0
     NEW_GW=""
@@ -84,10 +84,10 @@ fi
     # Check if the resolved IP is different from what we cached/applied
     if [ "$NEW_GW" != "$CACHED_GW" ]; then
         log "Async: Gateway changed (Old: $CACHED_GW -> New: $NEW_GW). Updating route..."
-        
+
         # Remove old route (blindly delete to be safe)
         route delete -inet6 "$OVERLAY_NET" >> "$LOGfile" 2>&1 || true
-        
+
         # Add new route
         if ! route add -inet6 "$OVERLAY_NET" "$NEW_GW" >> "$LOGfile" 2>&1; then
             msg="Async: Failed to add IPv6 route $OVERLAY_NET via $NEW_GW"
@@ -95,7 +95,7 @@ fi
             send_failure_email "$msg"
             exit 1
         fi
-        
+
         # Update Cache
         echo "$NEW_GW" > "$CACHE_FILE"
         log "Async: Cache updated."

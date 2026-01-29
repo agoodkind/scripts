@@ -20,18 +20,20 @@ error() { echo -e "${RED}[x]${NC} $1" >&2; exit 1; }
 
 usage() {
     cat << EOF
-Usage: $(basename "$0") --platform <linux|macos>
+Usage: $(basename "$0") --platform <linux|macos> [--force]
 
 Install auto-updater for scripts repository.
 
 Options:
     --platform linux     Install systemd-based updater (Linux)
     --platform macos     Install launchd-based updater (macOS)
+    --force              Force reinstall even if already installed
     -h, --help           Show this help message
 
 Examples:
     $(basename "$0") --platform linux
     $(basename "$0") --platform macos
+    $(basename "$0") --platform linux --force
 EOF
     exit 0
 }
@@ -43,17 +45,15 @@ EOF
 install_linux() {
     SCRIPTS_DIR="/opt/scripts"
     SERVICE_NAME="scripts-updater"
-    
+
     log "Installing scripts-updater for Linux (systemd)..."
-    check_systemd
-    check_root
     setup_repo_linux
     create_systemd_service
     create_systemd_timer
     enable_systemd_timer
     setup_path_linux
     setup_systemd_path
-    
+
     log "Installation complete!"
     log "Scripts installed to: $SCRIPTS_DIR"
     log "Timer status: systemctl status ${SERVICE_NAME}.timer"
@@ -71,6 +71,17 @@ check_root() {
     if [[ $EUID -ne 0 ]]; then
         error "This script must be run as root or with sudo"
     fi
+}
+
+check_linux_installed() {
+    local scripts_dir="/opt/scripts"
+    local service_name="scripts-updater"
+    if [[ -d "${scripts_dir}/.git" ]] && \
+       [[ -f "/etc/systemd/system/${service_name}.timer" ]] && \
+       [[ -f "/etc/systemd/system/${service_name}.service" ]]; then
+        return 0
+    fi
+    return 1
 }
 
 setup_repo_linux() {
@@ -142,9 +153,9 @@ setup_path_linux() {
 setup_systemd_path() {
     local systemd_conf_dir="/etc/systemd/system.conf.d"
     local path_conf="${systemd_conf_dir}/path.conf"
-    
+
     mkdir -p "$systemd_conf_dir"
-    
+
     if [[ ! -f "$path_conf" ]]; then
         log "Adding /opt/scripts to systemd PATH..."
         cat > "$path_conf" << 'EOF'
@@ -166,9 +177,8 @@ install_macos() {
     DAEMON_NAME="com.agoodkind.scripts-updater"
     DAEMON_PLIST="/Library/LaunchDaemons/${DAEMON_NAME}.plist"
     OLD_AGENT_PLIST="$HOME/Library/LaunchAgents/${DAEMON_NAME}.plist"
-    
+
     log "Installing scripts-updater for macOS (LaunchDaemon)..."
-    check_macos
     cleanup_old_agent
     setup_repo_macos
     create_launchd_daemon
@@ -184,13 +194,23 @@ check_macos() {
     fi
 }
 
+check_macos_installed() {
+    local scripts_dir="/usr/local/opt/scripts"
+    local daemon_name="com.agoodkind.scripts-updater"
+    local daemon_plist="/Library/LaunchDaemons/${daemon_name}.plist"
+    if [[ -d "${scripts_dir}/.git" ]] && [[ -f "$daemon_plist" ]]; then
+        return 0
+    fi
+    return 1
+}
+
 setup_repo_macos() {
     if [[ ! -d "/usr/local/opt" ]]; then
         log "Creating /usr/local/opt..."
         sudo mkdir -p /usr/local/opt
         sudo chown "$USER" /usr/local/opt
     fi
-    
+
     if [[ -d "$SCRIPTS_DIR/.git" ]]; then
         log "Scripts repo already exists, pulling latest..."
         git -C "$SCRIPTS_DIR" pull --ff-only || warn "Pull failed, continuing"
@@ -218,7 +238,7 @@ cleanup_old_agent() {
 
 create_launchd_daemon() {
     log "Creating launchd daemon..."
-    
+
     sudo tee "$DAEMON_PLIST" > /dev/null << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -226,7 +246,7 @@ create_launchd_daemon() {
 <dict>
     <key>Label</key>
     <string>${DAEMON_NAME}</string>
-    
+
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/git</string>
@@ -235,7 +255,7 @@ create_launchd_daemon() {
         <string>pull</string>
         <string>--ff-only</string>
     </array>
-    
+
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
@@ -243,10 +263,10 @@ create_launchd_daemon() {
         <key>Minute</key>
         <integer>0</integer>
     </dict>
-    
+
     <key>RunAtLoad</key>
     <true/>
-    
+
     <key>StandardOutPath</key>
     <string>/var/log/scripts-updater.log</string>
     <key>StandardErrorPath</key>
@@ -254,16 +274,16 @@ create_launchd_daemon() {
 </dict>
 </plist>
 EOF
-    
+
     sudo chown root:wheel "$DAEMON_PLIST"
     sudo chmod 644 "$DAEMON_PLIST"
 }
 
 load_launchd_daemon() {
     log "Loading launchd daemon..."
-    
+
     sudo launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
-    
+
     if sudo launchctl load "$DAEMON_PLIST"; then
         log "Daemon loaded successfully"
     else
@@ -283,27 +303,27 @@ setup_path_macos() {
 
 create_symlinks() {
     log "Creating symlinks in /usr/local/bin..."
-    
+
     [[ -d "/usr/local/bin" ]] || sudo mkdir -p /usr/local/bin
-    
+
     local script
     for script in "$SCRIPTS_DIR"/*; do
         [[ -f "$script" ]] || continue
         [[ -x "$script" ]] || continue
-        
+
         local name
         name=$(basename "$script")
-        
+
         case "$name" in
             LICENSE|README*|*.md|*.txt|.*) continue ;;
         esac
-        
+
         local target="/usr/local/bin/$name"
         if [[ -L "$target" ]] && \
             [[ "$(readlink "$target")" == "$script" ]]; then
             continue
         fi
-        
+
         sudo ln -sf "$script" "$target"
         log "  Linked: $name"
     done
@@ -327,11 +347,16 @@ show_macos_status() {
 # ============================================================================
 
 PLATFORM=""
+FORCE=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --platform)
             PLATFORM="$2"
             shift 2
+            ;;
+        --force)
+            FORCE=true
+            shift
             ;;
         -h|--help)
             usage
@@ -348,9 +373,20 @@ fi
 
 case "$PLATFORM" in
     linux)
+        check_systemd
+        check_root
+        if check_linux_installed && [[ "$FORCE" != "true" ]]; then
+            log "Scripts updater already installed. Use --force to reinstall."
+            exit 0
+        fi
         install_linux
         ;;
     macos)
+        check_macos
+        if check_macos_installed && [[ "$FORCE" != "true" ]]; then
+            log "Scripts updater already installed. Use --force to reinstall."
+            exit 0
+        fi
         install_macos
         ;;
     *)

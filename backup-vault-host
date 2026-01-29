@@ -15,7 +15,7 @@ LOG_FILE="/var/log/backup-vault-host.log"
 send_email() {
     local subject="$1"
     local message="$2"
-    
+
     if [ -f "$SEND_EMAIL_SCRIPT" ] && \
         [ -x "$SEND_EMAIL_SCRIPT" ]; then
         "$SEND_EMAIL_SCRIPT" -t "$EMAIL_RECIPIENT" -s "$subject" \
@@ -109,4 +109,3 @@ Stats:\n\
 - Transferred: ${TRANSFERRED:-N/A}\n\
 - Files: ${FILES:-N/A}\n\n\
 Time: $(date)"
-

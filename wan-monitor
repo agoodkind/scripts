@@ -126,14 +126,14 @@ get_stats_summary() {
     outages=$(get_stat "outages" 0)
     last_primary=$(get_stat "last_primary" "never")
     last_failover=$(get_stat "last_failover" "never")
-    
+
     [ "$last_primary" != "never" ] && \
         last_primary=$(date -d "@$last_primary" '+%Y-%m-%d %H:%M' 2>/dev/null || \
         date -r "$last_primary" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$last_primary")
     [ "$last_failover" != "never" ] && \
         last_failover=$(date -d "@$last_failover" '+%Y-%m-%d %H:%M' 2>/dev/null || \
         date -r "$last_failover" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$last_failover")
-    
+
     echo "Current state duration: $(format_duration $duration)"
     echo "Total failovers: $failovers"
     echo "Total recoveries: $recoveries"
@@ -148,10 +148,10 @@ update_stats_on_change() {
     local old_state="$2"
     local now
     now=$(date +%s)
-    
+
     set_stat "state_since" "$now"
     set_stat "last_state" "$old_state"
-    
+
     case "$new_state" in
         primary)
             set_stat "last_primary" "$now"
@@ -202,7 +202,7 @@ EOF
 send_email() {
     local subject="$1"
     local message="$2"
-    
+
     if [ -f "$SEND_EMAIL_SCRIPT" ] && [ -x "$SEND_EMAIL_SCRIPT" ]; then
         if "$SEND_EMAIL_SCRIPT" -t "$EMAIL_RECIPIENT" -s "$subject" \
             -m "$message" -n "Network Monitor" 2>&1; then
@@ -233,19 +233,19 @@ check_connectivity() {
     local gw6=$3
     local test4=$4
     local test6=$5
-    
+
     if ! ip link show "$iface" | grep -q "state UP"; then
         return 1
     fi
-    
+
     local ipv6_available=false
     local ipv6_ok=false
     local ipv4_ok=false
-    
+
     # IPv6 checks first (priority)
     if ip -6 addr show "$iface" | grep -q "inet6.*scope global"; then
         ipv6_available=true
-        
+
         # Check IPv6 gateway if provided
         if [ -n "$gw6" ]; then
             if ping6 -c 1 -W 1 -I "$iface" "$gw6" >/dev/null 2>&1; then
@@ -258,7 +258,7 @@ check_connectivity() {
                 ipv6_ok=true
             fi
         fi
-        
+
         # Also check external IPv6 connectivity if gateway check passed
         if [ "$ipv6_ok" = true ] && [ -n "$test6" ] && [ -n "$gw6" ]; then
             if ! ping6 -c 1 -W 2 -I "$iface" "$test6" \
@@ -267,20 +267,20 @@ check_connectivity() {
             fi
         fi
     fi
-    
+
     # IPv4 checks (secondary, but still required)
     if [ -n "$gw4" ]; then
         if ping -c 1 -W 1 -I "$iface" "$gw4" >/dev/null 2>&1; then
             ipv4_ok=true
         fi
     fi
-    
+
     if [ "$ipv4_ok" = true ] && [ -n "$test4" ]; then
         if ! ping -c 1 -W 2 -I "$iface" "$test4" >/dev/null 2>&1; then
             ipv4_ok=false
         fi
     fi
-    
+
     # For primary interface: IPv6 is required, IPv4 is also required
     # For backup interface: At least one must work
     if [ "$iface" = "$PRIMARY_IF" ]; then
@@ -298,7 +298,7 @@ check_connectivity() {
             return 0
         fi
     fi
-    
+
     return 1
 }
 
@@ -306,13 +306,13 @@ adjust_routes() {
     local use_backup=$1
     local current_state
     current_state=$(get_current_state)
-    
+
     if [ "$use_backup" = "true" ]; then
         BACKUP_GW4=$(ip route show default dev "$BACKUP_IF" \
             2>/dev/null | grep -oP "via \K[^ ]+" | head -1)
         BACKUP_GW6=$(ip -6 route show default dev "$BACKUP_IF" \
             2>/dev/null | grep -oP "via \K[^ ]+" | head -1)
-        
+
         if [ "$DRY_RUN" = true ]; then
             log "[DRY RUN] Would switch to backup interface ($BACKUP_IF)"
             log "[DRY RUN] IPv4 Gateway: ${BACKUP_GW4:-N/A}"
@@ -323,7 +323,7 @@ adjust_routes() {
                 ip route add default via "$BACKUP_GW4" dev "$BACKUP_IF" \
                     metric 50 2>/dev/null
             fi
-            
+
             # IPv6 route adjustment (priority)
             if [ -n "$BACKUP_GW6" ]; then
                 ip -6 route del default dev "$BACKUP_IF" 2>/dev/null
@@ -331,10 +331,10 @@ adjust_routes() {
                     "$BACKUP_IF" metric 50 pref medium 2>/dev/null
             fi
         fi
-        
+
         log "Switched to backup interface ($BACKUP_IF)"
         log_event "route_adjust" "Switched to backup interface"
-        
+
         if [ "$current_state" != "backup" ]; then
             log_event "state_change" "primary->backup (failover)"
             update_stats_on_change "backup" "$current_state"
@@ -362,12 +362,12 @@ $(date)${dry_run_msg}\n\n--- Stats ---\n$(get_stats_summary)"
             ip route del default dev "$PRIMARY_IF" 2>/dev/null
             ip route add default via "$PRIMARY_GW4" dev "$PRIMARY_IF" \
                 metric 100 2>/dev/null
-            
+
             # IPv6 route - primary
             ip -6 route del default dev "$PRIMARY_IF" 2>/dev/null
             ip -6 route add default via "$PRIMARY_GW6" dev \
                 "$PRIMARY_IF" metric 100 pref medium 2>/dev/null
-            
+
             # Reset backup routes to higher metric
             BACKUP_GW4=$(ip route show default dev "$BACKUP_IF" \
                 2>/dev/null | grep -oP "via \K[^ ]+" | head -1)
@@ -386,10 +386,10 @@ $(date)${dry_run_msg}\n\n--- Stats ---\n$(get_stats_summary)"
                     metric 199 pref medium 2>/dev/null
             fi
         fi
-        
+
         log "Switched back to primary interface ($PRIMARY_IF)"
         log_event "route_adjust" "Switched to primary interface"
-        
+
         if [ "$current_state" != "primary" ]; then
             log_event "state_change" "backup->primary (recovery)"
             update_stats_on_change "primary" "$current_state"
@@ -481,7 +481,7 @@ if check_connectivity "$PRIMARY_IF" "$PRIMARY_GW4" "$PRIMARY_GW6" \
         2>/dev/null | grep -oP "metric \K[0-9]+" || echo "999")
     CURRENT_METRIC6=$(ip -6 route show default dev "$PRIMARY_IF" \
         2>/dev/null | grep -oP "metric \K[0-9]+" || echo "999")
-    
+
     if [ "$CURRENT_METRIC" != "100" ] || \
         [ "$CURRENT_METRIC6" != "100" ]; then
         adjust_routes false
@@ -508,7 +508,7 @@ else
     # Get backup gateway for IPv6
     BACKUP_GW6=$(ip -6 route show default dev "$BACKUP_IF" \
         2>/dev/null | grep -oP "via \K[^ ]+" | head -1)
-    
+
     # Check backup interface (IPv6 first, then IPv4)
     if check_connectivity "$BACKUP_IF" "" "$BACKUP_GW6" "$TEST_HOST4" \
         "$TEST_HOST6"; then
@@ -516,7 +516,7 @@ else
             2>/dev/null | grep -oP "metric \K[0-9]+" || echo "999")
         CURRENT_METRIC6=$(ip -6 route show default dev "$BACKUP_IF" \
             2>/dev/null | grep -oP "metric \K[0-9]+" || echo "999")
-        
+
         if [ "$CURRENT_METRIC" != "50" ] || \
             [ "$CURRENT_METRIC6" != "50" ]; then
             adjust_routes true
