@@ -12,7 +12,12 @@
 
 set -euo pipefail
 
-BRANCH="agoodkind/pr-assets"
+GH_USER="$(command gh api user --jq '.login' 2>/dev/null)"
+if [[ -z "$GH_USER" ]]; then
+    echo "Error: could not detect GitHub user" >&2
+    exit 1
+fi
+BRANCH="${GH_USER}/pr-assets"
 
 function usage() {
     echo "Usage: gh upload <file>"
@@ -39,9 +44,11 @@ function create_branch() {
 
     echo "Creating orphan branch '${BRANCH}'..." >&2
 
-    # Empty tree (must pipe JSON for array field)
+    # GitHub API rejects truly empty trees, so seed
+    # with a .gitkeep using inline content.
     local tree_sha
-    tree_sha="$(echo '{"tree":[]}' \
+    tree_sha="$(printf '%s' \
+        '{"tree":[{"path":".gitkeep","mode":"100644","type":"blob","content":""}]}' \
         | command gh api \
             --method POST \
             "/repos/${repo}/git/trees" \
