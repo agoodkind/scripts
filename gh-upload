@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Upload images/videos to an orphan branch in the
+# current repo. Outputs the raw download URL.
+#
+# Usage:
+#   gh upload screenshot.png
+#   gh upload demo.mp4
+#
+# First run per-repo creates the orphan branch
+# "agoodkind/pr-assets" via the GitHub API.
+# No local git operations are performed.
+
+set -euo pipefail
+
+BRANCH="agoodkind/pr-assets"
+
+function usage() {
+    echo "Usage: gh upload <file>"
+    echo ""
+    echo "Uploads a file to the '${BRANCH}' orphan"
+    echo "branch in the current repo and prints the URL."
+    exit 1
+}
+
+function get_repo() {
+    command gh repo view --json nameWithOwner \
+        --jq '.nameWithOwner' 2>/dev/null
+}
+
+function branch_exists() {
+    local repo="$1"
+    command gh api \
+        "/repos/${repo}/git/ref/heads/${BRANCH}" \
+        --silent 2>/dev/null
+}
+
+function create_branch() {
+    local repo="$1"
+
+    echo "Creating orphan branch '${BRANCH}'..." >&2
+
+    # Empty tree (must pipe JSON for array field)
+    local tree_sha
+    tree_sha="$(echo '{"tree":[]}' \
+        | command gh api \
+            --method POST \
+            "/repos/${repo}/git/trees" \
+            --input - \
+            --jq '.sha')"
+
+    # Orphan commit (empty parents array)
+    local commit_sha
+    commit_sha="$(printf \
+        '{"message":"init: pr-assets branch","tree":"%s","parents":[]}' \
+        "$tree_sha" \
+        | command gh api \
+            --method POST \
+            "/repos/${repo}/git/commits" \
+            --input - \
+            --jq '.sha')"
+
+    # Create the ref
+    command gh api \
+        --method POST \
+        "/repos/${repo}/git/refs" \
+        -f "ref=refs/heads/${BRANCH}" \
+        -f "sha=${commit_sha}" \
+        --silent
+
+    echo "Branch '${BRANCH}' created." >&2
+}
+
+function ensure_branch() {
+    local repo="$1"
+    if branch_exists "$repo"; then
+        return
+    fi
+    create_branch "$repo"
+}
+
+function unique_name() {
+    local file="$1"
+    local base ext ts
+    base="$(basename "$file")"
+    ext="${base##*.}"
+    base="${base%.*}"
+    ts="$(date +%s)"
+    echo "${base}-${ts}.${ext}"
+}
+
+function upload_file() {
+    local file="$1"
+    local repo="$2"
+    local name
+    name="$(unique_name "$file")"
+    local content
+    content="$(base64 < "$file")"
+
+    # Upload via Contents API, but don't use the
+    # download_url (has expiring token for private repos).
+    local sha
+    sha="$(command gh api --method PUT \
+        "/repos/${repo}/contents/${name}" \
+        -f message="upload: ${name}" \
+        -f content="$content" \
+        -f branch="$BRANCH" \
+        --jq '.content.sha' 2>/dev/null)"
+
+    if [[ -z "$sha" ]]; then
+        return 1
+    fi
+
+    # blob?raw=true works for anyone with repo access
+    echo "https://github.com/${repo}/blob/${BRANCH}/${name}?raw=true"
+}
+
+# --- Parse args ---
+
+FILE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            ;;
+        *)
+            FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$FILE" ]]; then
+    echo "Error: no file specified" >&2
+    usage
+fi
+
+if [[ ! -f "$FILE" ]]; then
+    echo "Error: file not found: $FILE" >&2
+    exit 1
+fi
+
+REPO="$(get_repo)"
+if [[ -z "$REPO" ]]; then
+    echo "Error: not in a GitHub repo" >&2
+    exit 1
+fi
+
+# --- Upload ---
+
+ensure_branch "$REPO"
+
+echo "Uploading $(basename "$FILE")..." >&2
+URL="$(upload_file "$FILE" "$REPO")"
+
+if [[ -z "$URL" ]]; then
+    echo "Error: upload failed" >&2
+    exit 1
+fi
+
+echo "$URL"
