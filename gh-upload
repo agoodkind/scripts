@@ -100,16 +100,17 @@ function upload_file() {
     local repo="$2"
     local name
     name="$(unique_name "$file")"
-    local content
-    content="$(base64 < "$file")"
+    local tmp
+    tmp="$(mktemp -t gh-upload.XXXXXX)"
+    trap 'rm -f "$tmp"' RETURN
+    base64 < "$file" > "$tmp"
 
-    # Upload via Contents API, but don't use the
-    # download_url (has expiring token for private repos).
+    # Upload via Contents API; use @file to avoid ARG_MAX for large payloads.
     local sha
     sha="$(command gh api --method PUT \
         "/repos/${repo}/contents/${name}" \
         -f message="upload: ${name}" \
-        -f content="$content" \
+        -F "content=@${tmp}" \
         -f branch="$BRANCH" \
         --jq '.content.sha' 2>/dev/null)"
 
