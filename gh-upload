@@ -34,8 +34,10 @@ function get_repo() {
 
 function branch_exists() {
     local repo="$1"
+    local encoded_branch
+    encoded_branch="$(printf '%s' "$BRANCH" | sed 's|/|%2F|g')"
     command gh api \
-        "/repos/${repo}/git/ref/heads/${BRANCH}" \
+        "/repos/${repo}/git/ref/heads/${encoded_branch}" \
         --silent 2>/dev/null
 }
 
