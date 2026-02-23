@@ -102,33 +102,14 @@ setup_repo_linux() {
 
 create_systemd_service() {
     log "Creating systemd service..."
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << 'EOF'
-[Unit]
-Description=Update /opt/scripts from git
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'git -C /opt/scripts fetch origin && git -C /opt/scripts reset --hard origin/main'
-TimeoutStartSec=300
-EOF
+    cp "$SCRIPTS_DIR/updater/scripts-updater.service" \
+        "/etc/systemd/system/${SERVICE_NAME}.service"
 }
 
 create_systemd_timer() {
     log "Creating systemd timer..."
-    cat > "/etc/systemd/system/${SERVICE_NAME}.timer" << 'EOF'
-[Unit]
-Description=Run scripts-updater daily
-
-[Timer]
-OnCalendar=daily
-RandomizedDelaySec=3600
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
+    cp "$SCRIPTS_DIR/updater/scripts-updater.timer" \
+        "/etc/systemd/system/${SERVICE_NAME}.timer"
 }
 
 enable_systemd_timer() {
@@ -243,7 +224,8 @@ create_launchd_daemon() {
 
     sudo tee "$DAEMON_PLIST" > /dev/null << EOF
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -251,9 +233,8 @@ create_launchd_daemon() {
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>-c</string>
-        <string>git -C ${SCRIPTS_DIR} fetch origin &amp;&amp; git -C ${SCRIPTS_DIR} reset --hard origin/main</string>
+        <string>${SCRIPTS_DIR}/updater/scripts-update.sh</string>
+        <string>${SCRIPTS_DIR}</string>
     </array>
 
     <key>StartCalendarInterval</key>
