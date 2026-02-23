@@ -86,9 +86,10 @@ check_linux_installed() {
 
 setup_repo_linux() {
     if [[ -d "$SCRIPTS_DIR/.git" ]]; then
-        log "Scripts repo already exists, pulling latest..."
-        git -C "$SCRIPTS_DIR" pull --ff-only || \
-            warn "Pull failed, continuing with existing version"
+        log "Scripts repo already exists, resetting to origin/main..."
+        git -C "$SCRIPTS_DIR" fetch origin && \
+            git -C "$SCRIPTS_DIR" reset --hard origin/main || \
+            warn "Reset failed, continuing with existing version"
     else
         if [[ -d "$SCRIPTS_DIR" ]]; then
             warn "Removing existing $SCRIPTS_DIR (not a git repo)"
@@ -97,7 +98,6 @@ setup_repo_linux() {
         log "Cloning scripts repo to $SCRIPTS_DIR..."
         git clone "$SCRIPTS_REPO" "$SCRIPTS_DIR"
     fi
-    chmod -R +x "$SCRIPTS_DIR"
 }
 
 create_systemd_service() {
@@ -110,7 +110,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/git -C /opt/scripts pull --ff-only
+ExecStart=/bin/bash -c 'git -C /opt/scripts fetch origin && git -C /opt/scripts reset --hard origin/main'
 TimeoutStartSec=300
 EOF
 }
@@ -212,8 +212,10 @@ setup_repo_macos() {
     fi
 
     if [[ -d "$SCRIPTS_DIR/.git" ]]; then
-        log "Scripts repo already exists, pulling latest..."
-        git -C "$SCRIPTS_DIR" pull --ff-only || warn "Pull failed, continuing"
+        log "Scripts repo already exists, resetting to origin/main..."
+        git -C "$SCRIPTS_DIR" fetch origin && \
+            git -C "$SCRIPTS_DIR" reset --hard origin/main || \
+            warn "Reset failed, continuing with existing version"
     else
         if [[ -d "$SCRIPTS_DIR" ]]; then
             warn "Removing existing $SCRIPTS_DIR (not a git repo)"
@@ -249,11 +251,9 @@ create_launchd_daemon() {
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/git</string>
-        <string>-C</string>
-        <string>${SCRIPTS_DIR}</string>
-        <string>pull</string>
-        <string>--ff-only</string>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>git -C ${SCRIPTS_DIR} fetch origin &amp;&amp; git -C ${SCRIPTS_DIR} reset --hard origin/main</string>
     </array>
 
     <key>StartCalendarInterval</key>
