@@ -139,6 +139,14 @@ case $1 in
         notify "⚠️ No Communication" "UPS is not communicating (stale data)."
         ;;
 
+    ups-calibrating)
+        notify "🔄 Calibration Started" "UPS is running a battery self-test (OL+DISCHRG state)."
+        ;;
+
+    ups-calibration-done)
+        notify "✔️ Calibration Complete" "UPS battery self-test finished."
+        ;;
+
     *)
         # Catch-all for unknown events
         notify "❓ Unknown UPS Event" "The scheduler received an undefined command: '$1'. Check configuration."
