@@ -607,6 +607,12 @@ func (a *app) dirSize(path string) string {
 	if len(fields) == 0 {
 		return "?"
 	}
+	if fields[0] == "0" {
+		entries, readErr := os.ReadDir(path)
+		if readErr == nil && len(entries) == 0 {
+			return "empty"
+		}
+	}
 	return fields[0]
 }
 
