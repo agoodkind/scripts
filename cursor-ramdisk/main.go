@@ -239,9 +239,10 @@ func (a *app) cmdSetup(yes bool) error {
 	return a.cmdStatus()
 }
 
-// cmdTeardown rsyncs the live RAM disk state back to disk, then replaces each
-// symlink with the synced directory. The .orig cold backup is removed after a
-// successful rsync since the on-disk directory is now current.
+// cmdTeardown rsyncs the live RAM disk state back to disk, replaces each
+// symlink with the synced directory, and ejects the RAM disk. The .orig cold
+// backup is removed after a successful rsync since the on-disk directory is
+// now current.
 func (a *app) cmdTeardown(yes bool) error {
 	cursorDir, err := a.cursorAppSupportDir()
 	if err != nil {
@@ -324,7 +325,17 @@ func (a *app) cmdTeardown(yes bool) error {
 
 	fmt.Fprintln(a.stdout)
 	a.logf("Teardown complete. Cursor state is back on disk.")
-	a.logf("You can now start Cursor or eject %s if it is still mounted.", a.ramdisk)
+
+	// Eject the RAM disk if it is still mounted.
+	if _, err := os.Stat(a.ramdisk); err == nil {
+		a.logf("Ejecting RAM disk at %s ...", a.ramdisk)
+		if err := a.run("hdiutil", "detach", a.ramdisk); err != nil {
+			a.logf("WARN: could not eject RAM disk: %v", err)
+			a.logf("You can eject it manually: hdiutil detach %s", a.ramdisk)
+		} else {
+			a.logf("RAM disk ejected.")
+		}
+	}
 	return nil
 }
 

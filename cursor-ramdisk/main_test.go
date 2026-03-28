@@ -1642,7 +1642,53 @@ func TestCmdTeardown_Integration(t *testing.T) {
 		}
 		return newApp().runOutput(name, args...)
 	}
+	a.run = func(name string, args ...string) error {
+		if name == "hdiutil" {
+			// Simulate eject by removing the ramdisk dir.
+			return os.RemoveAll(ramdisk)
+		}
+		return newApp().run(name, args...)
+	}
 
+	if err := a.cmdTeardown(true); err != nil {
+		t.Fatal(err)
+	}
+	// RAM disk should be gone after eject.
+	if _, err := os.Stat(ramdisk); err == nil {
+		t.Fatal("expected ramdisk to be ejected")
+	}
+}
+
+func TestCmdTeardown_EjectWarn(t *testing.T) {
+	tmp := t.TempDir()
+	cursorDir := filepath.Join(tmp, "Cursor")
+	ramdisk := filepath.Join(tmp, "RAM")
+	for _, d := range defaultTargetDirs {
+		_ = os.MkdirAll(filepath.Join(ramdisk, flattenPath(d)), 0o755)
+		full := filepath.Join(cursorDir, filepath.FromSlash(d))
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		_ = os.Symlink(filepath.Join(ramdisk, flattenPath(d)), full)
+	}
+
+	a := newApp()
+	a.cursorDir = cursorDir
+	a.ramdisk = ramdisk
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return nil, errors.New("not running")
+		}
+		return newApp().runOutput(name, args...)
+	}
+	a.run = func(name string, args ...string) error {
+		if name == "hdiutil" {
+			return errors.New("hdiutil detach failed")
+		}
+		return newApp().run(name, args...)
+	}
+
+	// Should succeed overall even if eject fails (just warns).
 	if err := a.cmdTeardown(true); err != nil {
 		t.Fatal(err)
 	}
