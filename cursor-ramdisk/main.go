@@ -10,12 +10,15 @@
 //
 // Usage:
 //
-//	cursor-ramdisk setup     # move hot dirs to RAM disk and symlink back (idempotent)
-//	cursor-ramdisk teardown  # rsync RAM disk back to disk, remove symlinks (safe)
-//	cursor-ramdisk status    # show current state of each target dir
+//	cursor-ramdisk [-y] setup     # move hot dirs to RAM disk and symlink back (idempotent)
+//	cursor-ramdisk [-y] teardown  # rsync RAM disk back to disk, remove symlinks (safe)
+//	cursor-ramdisk status         # show current state of each target dir
+//
+// -y skips all interactive confirmation prompts.
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -27,9 +30,9 @@ import (
 )
 
 const (
-	ramdiskMount   = "/Volumes/CursorRAM"
-	ramdiskSizeMB  = 12288
-	ramdiskVolName = "CursorRAM"
+	ramdiskMount    = "/Volumes/CursorRAM"
+	ramdiskVolName  = "CursorRAM"
+	ramdiskHeadroom = 1024 // MB of headroom added on top of measured dir sizes
 )
 
 var targetDirs = []string{
@@ -40,17 +43,31 @@ var targetDirs = []string{
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	args := os.Args[1:]
+
+	// Parse -y flag anywhere in args.
+	yes := false
+	filtered := args[:0]
+	for _, a := range args {
+		if a == "-y" {
+			yes = true
+		} else {
+			filtered = append(filtered, a)
+		}
+	}
+	args = filtered
+
+	if len(args) < 1 {
 		usage()
 		os.Exit(1)
 	}
 
 	var err error
-	switch os.Args[1] {
+	switch args[0] {
 	case "setup":
-		err = cmdSetup()
+		err = cmdSetup(yes)
 	case "teardown":
-		err = cmdTeardown()
+		err = cmdTeardown(yes)
 	case "status":
 		err = cmdStatus()
 	default:
@@ -68,9 +85,12 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `cursor-ramdisk: manage Cursor IDE state on a RAM disk
 
 Usage:
-  cursor-ramdisk setup     move hot dirs to RAM disk and symlink back (idempotent)
-  cursor-ramdisk teardown  rsync RAM disk state back to disk, remove symlinks
-  cursor-ramdisk status    show current state of each target directory
+  cursor-ramdisk [-y] setup     move hot dirs to RAM disk and symlink back (idempotent)
+  cursor-ramdisk [-y] teardown  rsync RAM disk state back to disk, remove symlinks
+  cursor-ramdisk status         show current state of each target directory
+
+Flags:
+  -y  non-interactive: skip all confirmation prompts
 
 Cursor must not be running for setup or teardown.
 `)
@@ -81,14 +101,15 @@ Cursor must not be running for setup or teardown.
 // ---------------------------------------------------------------------------
 
 // cmdSetup is idempotent: it skips any directory that is already a symlink
-// pointing at the RAM disk. On first run it takes an APFS snapshot, creates
-// the RAM disk, copies each target directory onto it, saves the original as
-// <dir>.orig (never touched again), and replaces the original path with a
-// symlink.
+// pointing at the RAM disk. On first run it takes an APFS snapshot, measures
+// the actual disk usage of pending directories, creates a right-sized RAM disk
+// (measured total + ramdiskHeadroom MB), copies each target directory onto it,
+// saves the original as <dir>.orig (never touched again), and replaces the
+// original path with a symlink.
 //
 // .orig is a one-time cold backup taken at setup time. All durable state is
 // managed by teardown (which rsyncs the live RAM disk back to disk).
-func cmdSetup() error {
+func cmdSetup(yes bool) error {
 	cursorDir, err := cursorAppSupportDir()
 	if err != nil {
 		return err
@@ -98,12 +119,30 @@ func cmdSetup() error {
 		return err
 	}
 
-	// Check how many dirs still need work so we can skip the snapshot/ramdisk
-	// creation if everything is already set up.
 	pending := pendingDirs(cursorDir)
 	if len(pending) == 0 {
 		logf("All directories already on RAM disk. Nothing to do.")
 		return cmdStatus()
+	}
+
+	// Measure actual sizes so we can right-size the RAM disk.
+	totalMB, sizes, err := measureDirs(cursorDir, pending)
+	if err != nil {
+		return err
+	}
+	ramdiskSizeMB := totalMB + ramdiskHeadroom
+
+	logf("Directories to move:")
+	for _, dir := range pending {
+		logf("  %-30s  %d MB", dir, sizes[dir])
+	}
+	logf("Total: %d MB  +  %d MB headroom  =  %d MB RAM disk", totalMB, ramdiskHeadroom, ramdiskSizeMB)
+
+	if !yes {
+		if !confirm("Proceed with setup?") {
+			logf("Aborted.")
+			return nil
+		}
 	}
 
 	logf("Creating local APFS Time Machine snapshot...")
@@ -112,7 +151,7 @@ func cmdSetup() error {
 	}
 	logf("Snapshot created.")
 
-	if err := ensureRamdisk(); err != nil {
+	if err := ensureRamdisk(ramdiskSizeMB); err != nil {
 		return err
 	}
 
@@ -146,7 +185,7 @@ func cmdSetup() error {
 // cmdTeardown rsyncs the live RAM disk state back to disk, then replaces each
 // symlink with the synced directory. The .orig cold backup is removed after a
 // successful rsync since the on-disk directory is now current.
-func cmdTeardown() error {
+func cmdTeardown(yes bool) error {
 	cursorDir, err := cursorAppSupportDir()
 	if err != nil {
 		return err
@@ -156,21 +195,40 @@ func cmdTeardown() error {
 		return err
 	}
 
-	for _, dir := range targetDirs {
+	// Show what will happen before doing anything destructive.
+	active := activeDirs(cursorDir)
+	if len(active) == 0 {
+		logf("No directories are on the RAM disk. Nothing to do.")
+		return cmdStatus()
+	}
+
+	logf("Directories to sync back to disk:")
+	for _, dir := range active {
+		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
+		dest := filepath.Join(ramdiskMount, flattenPath(dir))
+		if _, err := os.Stat(dest); errors.Is(err, fs.ErrNotExist) {
+			logf("  %-30s  (RAM disk gone -- will restore from .orig)", dir)
+		} else {
+			logf("  %-30s  %s", dir, dirSize(src))
+		}
+	}
+
+	if !yes {
+		if !confirm("Proceed with teardown?") {
+			logf("Aborted.")
+			return nil
+		}
+	}
+
+	for _, dir := range active {
 		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
 		dest := filepath.Join(ramdiskMount, flattenPath(dir))
 		orig := src + ".orig"
 
-		info, err := os.Lstat(src)
-		if err != nil || info.Mode()&fs.ModeSymlink == 0 {
-			logf("SKIP: %s is not a symlink (not on RAM disk)", dir)
-			continue
-		}
-
 		if _, err := os.Stat(dest); errors.Is(err, fs.ErrNotExist) {
 			logf("WARN: RAM disk dest %s missing -- RAM disk may be gone", dest)
 			logf("      Restoring from .orig if available...")
-			if _, err := os.Stat(orig); err == nil {
+			if _, statErr := os.Stat(orig); statErr == nil {
 				if err := os.Remove(src); err != nil {
 					return fmt.Errorf("remove dangling symlink %s: %w", src, err)
 				}
@@ -184,9 +242,8 @@ func cmdTeardown() error {
 			continue
 		}
 
-		// Rsync live RAM disk state -> a fresh on-disk directory alongside .orig.
-		// We write to src+".new" first so the operation is atomic: if rsync fails
-		// mid-way, the existing symlink is untouched.
+		// Rsync live RAM disk state -> src+".new" first so the operation is
+		// atomic: if rsync fails mid-way, the existing symlink is untouched.
 		newDir := src + ".new"
 		logf("Syncing %s -> %s ...", dest, newDir)
 		if err := syncDir(dest, newDir); err != nil {
@@ -232,6 +289,18 @@ func logf(format string, args ...any) {
 	fmt.Printf("[%s] %s\n", ts, fmt.Sprintf(format, args...))
 }
 
+// confirm prints a y/N prompt to stderr and reads a line from stdin.
+// It returns true only if the user types "y" or "yes" (case-insensitive).
+func confirm(prompt string) bool {
+	fmt.Fprintf(os.Stderr, "%s [y/N] ", prompt)
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return false
+	}
+	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	return answer == "y" || answer == "yes"
+}
+
 func cursorAppSupportDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -256,9 +325,8 @@ func guardCursorNotRunning() error {
 	return nil
 }
 
-// pendingDirs returns the subset of targetDirs that are not yet symlinks on
-// the RAM disk, so setup can skip the snapshot and disk creation when there is
-// nothing to do.
+// pendingDirs returns the subset of targetDirs that are not yet symlinks,
+// i.e. still need to be moved to the RAM disk.
 func pendingDirs(cursorDir string) []string {
 	var pending []string
 	for _, dir := range targetDirs {
@@ -275,15 +343,66 @@ func pendingDirs(cursorDir string) []string {
 	return pending
 }
 
-// ensureRamdisk creates a RAM disk at ramdiskMount if one is not already there.
-func ensureRamdisk() error {
+// activeDirs returns the subset of targetDirs that are currently symlinks
+// (i.e. on the RAM disk), used by teardown to know what to sync back.
+func activeDirs(cursorDir string) []string {
+	var active []string
+	for _, dir := range targetDirs {
+		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
+		info, err := os.Lstat(src)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			active = append(active, dir)
+		}
+	}
+	return active
+}
+
+// measureDirs returns the total size in MB of each dir in dirs, and a per-dir
+// map. It uses `du -sm` (megabytes, one line per dir) for speed.
+func measureDirs(cursorDir string, dirs []string) (totalMB int, sizes map[string]int, err error) {
+	sizes = make(map[string]int, len(dirs))
+	for _, dir := range dirs {
+		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
+		mb, e := dirSizeMB(src)
+		if e != nil {
+			return 0, nil, fmt.Errorf("measure %s: %w", dir, e)
+		}
+		sizes[dir] = mb
+		totalMB += mb
+	}
+	return totalMB, sizes, nil
+}
+
+// dirSizeMB returns the disk usage of path in whole megabytes using `du -sm`.
+func dirSizeMB(path string) (int, error) {
+	out, err := exec.Command("du", "-sm", path).Output()
+	if err != nil {
+		return 0, fmt.Errorf("du -sm %s: %w", path, err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("du -sm %s: empty output", path)
+	}
+	var mb int
+	if _, err := fmt.Sscan(fields[0], &mb); err != nil {
+		return 0, fmt.Errorf("du -sm %s: parse %q: %w", path, fields[0], err)
+	}
+	return mb, nil
+}
+
+// ensureRamdisk creates a RAM disk of sizeMB at ramdiskMount if one is not
+// already there.
+func ensureRamdisk(sizeMB int) error {
 	if info, err := os.Stat(ramdiskMount); err == nil && info.IsDir() {
 		logf("RAM disk already mounted at %s, skipping creation.", ramdiskMount)
 		return nil
 	}
 
-	sectors := ramdiskSizeMB * 2048
-	logf("Creating %d MB RAM disk...", ramdiskSizeMB)
+	sectors := sizeMB * 2048
+	logf("Creating %d MB RAM disk...", sizeMB)
 
 	attachOut, err := exec.Command("hdiutil", "attach", "-nomount",
 		fmt.Sprintf("ram://%d", sectors)).Output()
