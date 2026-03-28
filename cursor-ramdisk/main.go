@@ -55,7 +55,7 @@ type app struct {
 const (
 	ramdiskMount    = "/Volumes/CursorRAM"
 	ramdiskVolName  = "CursorRAM"
-	ramdiskHeadroom = 1024 // MB of headroom added on top of measured dir sizes
+	ramdiskHeadroom = 4096 // MB of headroom added on top of measured dir sizes
 )
 
 var defaultTargetDirs = []string{
@@ -457,12 +457,54 @@ func (a *app) dirSizeMB(path string) (int, error) {
 	return mb, nil
 }
 
+// physRAMAvailableMB returns the number of megabytes of free physical RAM
+// by reading vm.page_free_count and vm.pagesize via sysctl.
+// The freeMB value is intentionally conservative: it only counts pages the
+// kernel currently marks free, so it may be lower than what macOS would
+// actually reclaim from inactive/speculative caches.
+func (a *app) physRAMAvailableMB() (int, error) {
+	freeOut, err := a.runOutput("sysctl", "-n", "vm.page_free_count")
+	if err != nil {
+		return 0, fmt.Errorf("sysctl vm.page_free_count: %w", err)
+	}
+	var freePages int
+	if _, err := fmt.Sscan(strings.TrimSpace(string(freeOut)), &freePages); err != nil {
+		return 0, fmt.Errorf("parse vm.page_free_count %q: %w", strings.TrimSpace(string(freeOut)), err)
+	}
+
+	sizeOut, err := a.runOutput("sysctl", "-n", "vm.pagesize")
+	if err != nil {
+		return 0, fmt.Errorf("sysctl vm.pagesize: %w", err)
+	}
+	var pageSize int
+	if _, err := fmt.Sscan(strings.TrimSpace(string(sizeOut)), &pageSize); err != nil {
+		return 0, fmt.Errorf("parse vm.pagesize %q: %w", strings.TrimSpace(string(sizeOut)), err)
+	}
+
+	freeMB := (freePages * pageSize) / (1024 * 1024)
+	return freeMB, nil
+}
+
 // ensureRamdisk creates a RAM disk of sizeMB at a.ramdisk if one is not
-// already there.
+// already there. It checks physical RAM availability first and returns an
+// error if sizeMB exceeds the free physical RAM reported by the kernel.
 func (a *app) ensureRamdisk(sizeMB int) error {
 	if info, err := os.Stat(a.ramdisk); err == nil && info.IsDir() {
 		a.logf("RAM disk already mounted at %s, skipping creation.", a.ramdisk)
 		return nil
+	}
+
+	availMB, err := a.physRAMAvailableMB()
+	if err != nil {
+		return fmt.Errorf("check available RAM: %w", err)
+	}
+	a.logf("Physical RAM free: %d MB  requested: %d MB", availMB, sizeMB)
+	if sizeMB > availMB {
+		return fmt.Errorf(
+			"not enough free physical RAM: need %d MB but only %d MB free -- "+
+				"reduce headroom or close other applications first",
+			sizeMB, availMB,
+		)
 	}
 
 	sectors := sizeMB * 2048
