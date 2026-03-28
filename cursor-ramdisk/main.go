@@ -261,12 +261,11 @@ func (a *app) cmdTeardown(yes bool) error {
 
 	a.logf("Directories to sync back to disk:")
 	for _, dir := range active {
-		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
 		dest := filepath.Join(a.ramdisk, flattenPath(dir))
 		if _, err := os.Stat(dest); errors.Is(err, fs.ErrNotExist) {
 			a.logf("  %-30s  (RAM disk gone -- will restore from .orig)", dir)
 		} else {
-			a.logf("  %-30s  %s", dir, a.dirSize(src))
+			a.logf("  %-30s  %s", dir, a.dirSize(dest))
 		}
 	}
 
