@@ -485,11 +485,24 @@ func (a *app) physRAMAvailableMB() (int, error) {
 }
 
 // ensureRamdisk creates a RAM disk of sizeMB at a.ramdisk if one is not
-// already there. It checks physical RAM availability first and returns an
-// error if sizeMB exceeds the free physical RAM reported by the kernel.
+// already there. If one is already mounted but smaller than sizeMB, it
+// returns an error asking the user to teardown first. It checks physical
+// RAM availability before creating a new disk.
 func (a *app) ensureRamdisk(sizeMB int) error {
 	if info, err := os.Stat(a.ramdisk); err == nil && info.IsDir() {
-		a.logf("RAM disk already mounted at %s, skipping creation.", a.ramdisk)
+		// Check whether the existing RAM disk is large enough.
+		currentMB, dfErr := a.ramdiskSizeMB()
+		if dfErr != nil {
+			a.logf("WARN: could not determine current RAM disk size: %v", dfErr)
+			a.logf("RAM disk already mounted at %s, proceeding anyway.", a.ramdisk)
+			return nil
+		}
+		if currentMB < sizeMB {
+			return fmt.Errorf(
+				"RAM disk at %s is %d MB but %d MB is needed -- run teardown first, then re-run setup",
+				a.ramdisk, currentMB, sizeMB)
+		}
+		a.logf("RAM disk already mounted at %s (%d MB >= %d MB needed), skipping creation.", a.ramdisk, currentMB, sizeMB)
 		return nil
 	}
 
@@ -524,6 +537,28 @@ func (a *app) ensureRamdisk(sizeMB int) error {
 
 	a.logf("RAM disk mounted at %s", a.ramdisk)
 	return nil
+}
+
+// ramdiskSizeMB returns the total size of the mounted RAM disk in MB using df.
+func (a *app) ramdiskSizeMB() (int, error) {
+	// df -m outputs size in 1 MB blocks; the second field of the matching line is total size.
+	out, err := a.runOutput("df", "-m", a.ramdisk)
+	if err != nil {
+		return 0, fmt.Errorf("df -m %s: %w", a.ramdisk, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return 0, fmt.Errorf("df -m %s: unexpected output", a.ramdisk)
+	}
+	fields := strings.Fields(lines[1])
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("df -m %s: unexpected fields in %q", a.ramdisk, lines[1])
+	}
+	var mb int
+	if _, err := fmt.Sscan(fields[1], &mb); err != nil {
+		return 0, fmt.Errorf("df -m %s: parse %q: %w", a.ramdisk, fields[1], err)
+	}
+	return mb, nil
 }
 
 func symlinkTargetExists(link string) bool {

@@ -1203,6 +1203,62 @@ func TestPhysRAMAvailableMB(t *testing.T) {
 	})
 }
 
+func TestRamdiskSizeMB(t *testing.T) {
+	t.Run("happy", func(t *testing.T) {
+		a := newApp()
+		a.ramdisk = "/Volumes/CursorRAM"
+		a.runOutput = func(name string, args ...string) ([]byte, error) {
+			if name == "df" && args[0] == "-m" {
+				return []byte("Filesystem  1M-blocks  Used  Available  Capacity  Mounted on\n/dev/disk5s1  15360  10240  5120  67%  /Volumes/CursorRAM\n"), nil
+			}
+			return nil, errors.New("unexpected")
+		}
+		mb, err := a.ramdiskSizeMB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mb != 15360 {
+			t.Fatalf("expected 15360, got %d", mb)
+		}
+	})
+
+	t.Run("df_error", func(t *testing.T) {
+		a := newApp()
+		a.ramdisk = "/Volumes/CursorRAM"
+		a.runOutput = func(name string, args ...string) ([]byte, error) {
+			return nil, errors.New("df failed")
+		}
+		_, err := a.ramdiskSizeMB()
+		if err == nil || !strings.Contains(err.Error(), "df -m") {
+			t.Fatalf("expected df error, got %v", err)
+		}
+	})
+
+	t.Run("single_line_output", func(t *testing.T) {
+		a := newApp()
+		a.ramdisk = "/Volumes/CursorRAM"
+		a.runOutput = func(name string, args ...string) ([]byte, error) {
+			return []byte("Filesystem  1M-blocks\n"), nil
+		}
+		_, err := a.ramdiskSizeMB()
+		if err == nil || !strings.Contains(err.Error(), "unexpected output") {
+			t.Fatalf("expected unexpected output error, got %v", err)
+		}
+	})
+
+	t.Run("parse_error", func(t *testing.T) {
+		a := newApp()
+		a.ramdisk = "/Volumes/CursorRAM"
+		a.runOutput = func(name string, args ...string) ([]byte, error) {
+			return []byte("Filesystem  1M-blocks\n/dev/disk5s1  notanumber\n"), nil
+		}
+		_, err := a.ramdiskSizeMB()
+		if err == nil || !strings.Contains(err.Error(), "parse") {
+			t.Fatalf("expected parse error, got %v", err)
+		}
+	})
+}
+
 func TestEnsureRamdisk(t *testing.T) {
 	t.Run("already_mounted", func(t *testing.T) {
 		tmp := t.TempDir()
@@ -1211,6 +1267,39 @@ func TestEnsureRamdisk(t *testing.T) {
 		a.stdout = io.Discard
 		if err := a.ensureRamdisk(100); err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	t.Run("already_mounted_large_enough", func(t *testing.T) {
+		tmp := t.TempDir()
+		a := newApp()
+		a.ramdisk = tmp
+		a.stdout = io.Discard
+		a.runOutput = func(name string, args ...string) ([]byte, error) {
+			if name == "df" {
+				return []byte("Filesystem  1M-blocks  Used  Available  Capacity  Mounted on\n/dev/diskX  16000  8000  8000  50%  " + tmp + "\n"), nil
+			}
+			return nil, errors.New("unexpected")
+		}
+		if err := a.ensureRamdisk(15000); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("already_mounted_too_small", func(t *testing.T) {
+		tmp := t.TempDir()
+		a := newApp()
+		a.ramdisk = tmp
+		a.stdout = io.Discard
+		a.runOutput = func(name string, args ...string) ([]byte, error) {
+			if name == "df" {
+				return []byte("Filesystem  1M-blocks  Used  Available  Capacity  Mounted on\n/dev/diskX  12000  8000  4000  67%  " + tmp + "\n"), nil
+			}
+			return nil, errors.New("unexpected")
+		}
+		err := a.ensureRamdisk(15000)
+		if err == nil || !strings.Contains(err.Error(), "run teardown first") {
+			t.Fatalf("expected undersized error, got %v", err)
 		}
 	})
 

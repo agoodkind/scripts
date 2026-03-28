@@ -1,22 +1,21 @@
 # Cursor RAM Disk
 
 Move Cursor's hot-path state directories from SSD to a RAM disk to reduce
-SSD wear and improve I/O latency. With 128 GB of RAM, a 12 GB RAM disk costs
-nothing meaningful.
+SSD wear and improve I/O latency.
 
 ## What gets moved
 
 Targets are based on observed write patterns during an active session, not
 guesswork. Cold directories (extension bundles, GPU cache) are left on disk.
 
-| Directory | Size | Why it's hot |
-|---|---|---|
-| `User/globalStorage/` | ~9.6 GB | `state.vscdb` + WAL written every few seconds |
-| `User/workspaceStorage/` | ~1.2 GB | per-workspace `state.vscdb`, written constantly |
-| `User/History/` | ~60 MB | written on every file save |
-| `Cache/` | ~128 MB | HTTP cache, written on every network request |
+| Directory | Why it's hot |
+|---|---|
+| `User/globalStorage/` | `state.vscdb` + WAL written every few seconds |
+| `User/workspaceStorage/` | per-workspace `state.vscdb`, written constantly |
+| `User/History/` | written on every file save |
+| `Cache/` | HTTP cache, written on every network request |
 
-Total RAM budget: ~11 GB. A 12 GB RAM disk is used.
+The RAM disk is sized dynamically: measured total of the target directories + 4 GB headroom.
 
 ## Commands
 
@@ -39,7 +38,7 @@ What it does:
 
 1. Takes an APFS local snapshot (`tmutil localsnapshot`) -- instant, no
    external drive needed.
-2. Creates a 12 GB RAM disk at `/Volumes/CursorRAM`.
+2. Creates a right-sized RAM disk (measured total + 4 GB headroom) at `/Volumes/CursorRAM`.
 3. For each target directory:
    - Copies it to the RAM disk.
    - Renames the original to `<dir>.orig` (cold backup, never touched again).
@@ -128,7 +127,7 @@ disk every N minutes while Cursor is running, so state is preserved even after
 a crash. The rough design:
 
 ```xml
-<!-- ~/Library/LaunchAgents/io.goodkind.cursor-ramdisk-sync.plist -->
+<!-- ~/Library/LaunchAgents/cursor-ramdisk-sync.plist -->
 <key>ProgramArguments</key>
 <array>
   <string>/path/to/cursor-ramdisk-sync</string>  <!-- thin wrapper around syncDir -->
@@ -141,4 +140,4 @@ The sync wrapper would: check that `/Volumes/CursorRAM` is mounted, check that
 Cursor is running, and rsync each RAM disk directory to a `.sync` sibling on
 disk. On the next `teardown`, it would prefer `.sync` over the raw RAM disk if
 Cursor crashed and the RAM disk is gone. This is left as future work since the
-main crash risk for a homelab machine is low.
+main crash risk for most machines is low.
