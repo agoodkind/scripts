@@ -585,7 +585,7 @@ func (a *app) printStatus(cursorDir string) error {
 		if info.Mode()&fs.ModeSymlink != 0 {
 			target, _ := os.Readlink(src)
 			valid := symlinkTargetExists(src)
-			size := a.dirSize(src)
+			size := a.dirSize(target)
 			if valid {
 				a.logf("  RAM   %s -> %s (%s)", dir, target, size)
 			} else {
