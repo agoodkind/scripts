@@ -487,6 +487,12 @@ func doTestSetup(t *testing.T, a *app, yes bool) error {
 	t.Helper()
 	cursorDir := a.cursorDir
 	ramdiskRoot := a.ramdisk
+
+	// Heal dangling symlinks (mirrors cmdSetup).
+	if err := a.healDanglingSymlinks(cursorDir); err != nil {
+		return err
+	}
+
 	pending := a.pendingDirs(cursorDir)
 	if len(pending) == 0 {
 		a.logf("All directories already on RAM disk. Nothing to do.")
@@ -577,8 +583,18 @@ func doTestTeardown(t *testing.T, a *app, yes bool) error {
 
 		if _, err := os.Stat(dest); errors.Is(err, fs.ErrNotExist) {
 			a.logf("WARN: RAM disk dest %s missing -- RAM disk may be gone", dest)
-			a.logf("      Restoring from .orig if available...")
-			if _, statErr := os.Stat(orig); statErr == nil {
+			a.logf("      Restoring from .sync or .orig if available...")
+			syncDir := src + ".sync"
+			if _, statErr := os.Stat(syncDir); statErr == nil {
+				if err := os.Remove(src); err != nil {
+					return fmt.Errorf("remove dangling symlink %s: %w", src, err)
+				}
+				if err := os.Rename(syncDir, src); err != nil {
+					return fmt.Errorf("restore sync %s -> %s: %w", syncDir, src, err)
+				}
+				_ = os.RemoveAll(orig)
+				a.logf("  Restored from .sync: %s", dir)
+			} else if _, statErr2 := os.Stat(orig); statErr2 == nil {
 				if err := os.Remove(src); err != nil {
 					return fmt.Errorf("remove dangling symlink %s: %w", src, err)
 				}
@@ -587,7 +603,7 @@ func doTestTeardown(t *testing.T, a *app, yes bool) error {
 				}
 				a.logf("  Restored from .orig: %s", dir)
 			} else {
-				a.logf("  ERROR: no .orig found either -- %s is unrecoverable", dir)
+				a.logf("  ERROR: no .sync or .orig found -- %s is unrecoverable", dir)
 			}
 			continue
 		}
@@ -609,6 +625,8 @@ func doTestTeardown(t *testing.T, a *app, yes bool) error {
 		if err := os.RemoveAll(orig); err != nil {
 			a.logf("WARN: could not remove .orig %s: %v", orig, err)
 		}
+		syncDir := src + ".sync"
+		_ = os.RemoveAll(syncDir)
 
 		a.logf("Done: %s", dir)
 	}
@@ -2440,4 +2458,850 @@ func TestTeardown_SymlinkAtomicity(t *testing.T) {
 	newDir := src + ".new"
 	assertIsDir(t, src)
 	assertNotExist(t, newDir)
+}
+
+// ---------------------------------------------------------------------------
+// cmdSync tests
+// ---------------------------------------------------------------------------
+
+func TestCmdSync_RAMNotMounted(t *testing.T) {
+	tmp := t.TempDir()
+	a := newApp()
+	a.cursorDir = filepath.Join(tmp, "Cursor")
+	a.ramdisk = filepath.Join(tmp, "nonexistent-ram")
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	if err := a.cmdSync(); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCmdSync_CursorNotRunning(t *testing.T) {
+	tmp := t.TempDir()
+	ram := filepath.Join(tmp, "ram")
+	_ = os.MkdirAll(ram, 0o755)
+	a := newApp()
+	a.cursorDir = filepath.Join(tmp, "Cursor")
+	a.ramdisk = ram
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return nil, errors.New("exit status 1")
+		}
+		return nil, errors.New("unexpected")
+	}
+	if err := a.cmdSync(); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCmdSync_NoActiveDirs(t *testing.T) {
+	env := newTestEnv(t)
+	a := newApp()
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return []byte("123\n"), nil // Cursor "running"
+		}
+		return nil, errors.New("unexpected")
+	}
+	// No dirs are symlinks, so activeDirs returns empty.
+	if err := a.cmdSync(); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCmdSync_HappyPath(t *testing.T) {
+	env := newTestEnv(t)
+	setup := testAppForDoTest(t)
+	setup.cursorDir = env.cursorDir
+	setup.ramdisk = env.ramdiskDir
+	if err := doTestSetup(t, setup, true); err != nil {
+		t.Fatal(err)
+	}
+	// Write live data to the RAM disk after setup.
+	for _, d := range defaultTargetDirs {
+		dest := filepath.Join(env.ramdiskDir, flattenPath(d))
+		_ = os.WriteFile(filepath.Join(dest, "live.txt"), []byte("live:"+d), 0o644)
+	}
+
+	a := newApp()
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return []byte("123\n"), nil
+		}
+		return newApp().runOutput(name, args...)
+	}
+
+	if err := a.cmdSync(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, d := range defaultTargetDirs {
+		syncDir := filepath.Join(env.cursorDir, filepath.FromSlash(d)) + ".sync"
+		assertIsDir(t, syncDir)
+		got := readFile(t, filepath.Join(syncDir, "live.txt"))
+		if got != "live:"+d {
+			t.Fatalf("sync content mismatch for %s: got %q", d, got)
+		}
+	}
+}
+
+func TestCmdSync_SyncError(t *testing.T) {
+	env := newTestEnv(t)
+	setup := testAppForDoTest(t)
+	setup.cursorDir = env.cursorDir
+	setup.ramdisk = env.ramdiskDir
+	if err := doTestSetup(t, setup, true); err != nil {
+		t.Fatal(err)
+	}
+
+	a := newApp()
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return []byte("123\n"), nil
+		}
+		return nil, errors.New("unexpected")
+	}
+	a.run = func(name string, args ...string) error {
+		if name == "rsync" {
+			return errors.New("rsync failed")
+		}
+		return errors.New("unexpected")
+	}
+
+	err := a.cmdSync()
+	if err == nil || !strings.Contains(err.Error(), "sync") {
+		t.Fatalf("expected sync error, got %v", err)
+	}
+}
+
+func TestCmdSync_CursorDirError(t *testing.T) {
+	a := newApp()
+	a.cursorDir = ""
+	a.userHome = func() (string, error) {
+		return "", errors.New("no home")
+	}
+	a.stdout = io.Discard
+	err := a.cmdSync()
+	if err == nil || !strings.Contains(err.Error(), "home dir") {
+		t.Fatalf("expected home error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// healDanglingSymlinks tests
+// ---------------------------------------------------------------------------
+
+func TestHealDanglingSymlinks_WithSync(t *testing.T) {
+	env := newTestEnv(t)
+	a := testAppForDoTest(t)
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+
+	// Setup one dir, then simulate crash (remove RAM disk target).
+	dirs := []string{"Cache"}
+	for _, d := range defaultTargetDirs {
+		if d != "Cache" {
+			_ = os.RemoveAll(filepath.Join(env.cursorDir, filepath.FromSlash(d)))
+		}
+	}
+	env.setup(t, dirs)
+
+	src := filepath.Join(env.cursorDir, "Cache")
+	syncDir := src + ".sync"
+	_ = os.MkdirAll(syncDir, 0o755)
+	_ = os.WriteFile(filepath.Join(syncDir, "synced.txt"), []byte("from-sync"), 0o644)
+
+	// Remove RAM disk target to make symlink dangling.
+	_ = os.RemoveAll(filepath.Join(env.ramdiskDir, flattenPath("Cache")))
+
+	if err := a.healDanglingSymlinks(env.cursorDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have restored from .sync.
+	assertIsDir(t, src)
+	assertNotExist(t, syncDir)
+	assertNotExist(t, src+".orig")
+	got := readFile(t, filepath.Join(src, "synced.txt"))
+	if got != "from-sync" {
+		t.Fatalf("expected .sync content, got %q", got)
+	}
+}
+
+func TestHealDanglingSymlinks_WithOrigOnly(t *testing.T) {
+	env := newTestEnv(t)
+	a := testAppForDoTest(t)
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+
+	dirs := []string{"Cache"}
+	for _, d := range defaultTargetDirs {
+		if d != "Cache" {
+			_ = os.RemoveAll(filepath.Join(env.cursorDir, filepath.FromSlash(d)))
+		}
+	}
+	env.setup(t, dirs)
+
+	src := filepath.Join(env.cursorDir, "Cache")
+	_ = os.RemoveAll(filepath.Join(env.ramdiskDir, flattenPath("Cache")))
+	// No .sync — .orig is the only backup.
+
+	if err := a.healDanglingSymlinks(env.cursorDir); err != nil {
+		t.Fatal(err)
+	}
+
+	assertIsDir(t, src)
+	assertNotExist(t, src+".orig")
+	got := readFile(t, filepath.Join(src, "state.db"))
+	if got != "initial:Cache" {
+		t.Fatalf("expected .orig content, got %q", got)
+	}
+}
+
+func TestHealDanglingSymlinks_Neither(t *testing.T) {
+	env := newTestEnv(t)
+	a := testAppForDoTest(t)
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+
+	dirs := []string{"Cache"}
+	for _, d := range defaultTargetDirs {
+		if d != "Cache" {
+			_ = os.RemoveAll(filepath.Join(env.cursorDir, filepath.FromSlash(d)))
+		}
+	}
+	env.setup(t, dirs)
+
+	src := filepath.Join(env.cursorDir, "Cache")
+	_ = os.RemoveAll(filepath.Join(env.ramdiskDir, flattenPath("Cache")))
+	_ = os.RemoveAll(src + ".orig")
+	// No .sync, no .orig.
+
+	if err := a.healDanglingSymlinks(env.cursorDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dir should no longer exist at all (dangling symlink removed).
+	assertNotExist(t, src)
+}
+
+func TestHealDanglingSymlinks_ValidSymlinkSkipped(t *testing.T) {
+	env := newTestEnv(t)
+	a := testAppForDoTest(t)
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+
+	dirs := []string{"Cache"}
+	for _, d := range defaultTargetDirs {
+		if d != "Cache" {
+			_ = os.RemoveAll(filepath.Join(env.cursorDir, filepath.FromSlash(d)))
+		}
+	}
+	env.setup(t, dirs)
+	// RAM disk target still exists — symlink is valid.
+
+	if err := a.healDanglingSymlinks(env.cursorDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should still be a symlink — not healed.
+	assertIsSymlink(t, filepath.Join(env.cursorDir, "Cache"))
+}
+
+func TestHealDanglingSymlinks_RegularDirSkipped(t *testing.T) {
+	env := newTestEnv(t)
+	a := testAppForDoTest(t)
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+	// All dirs are regular directories (never set up) — nothing to heal.
+
+	if err := a.healDanglingSymlinks(env.cursorDir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, d := range defaultTargetDirs {
+		src := filepath.Join(env.cursorDir, filepath.FromSlash(d))
+		assertIsDir(t, src)
+	}
+}
+
+func TestHealDanglingSymlinks_RemoveError(t *testing.T) {
+	env := newTestEnv(t)
+	a := newApp()
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.dirs = []string{"Cache"}
+
+	src := filepath.Join(env.cursorDir, "Cache")
+	orig := src + ".orig"
+	_ = os.MkdirAll(orig, 0o755)
+	_ = os.RemoveAll(src)
+	_ = os.Symlink(filepath.Join(env.ramdiskDir, "gone"), src)
+
+	a.remove = func(name string) error {
+		if name == src {
+			return errors.New("remove failed")
+		}
+		return os.Remove(name)
+	}
+
+	err := a.healDanglingSymlinks(env.cursorDir)
+	if err == nil || !strings.Contains(err.Error(), "remove dangling") {
+		t.Fatalf("expected remove error, got %v", err)
+	}
+}
+
+// TestCmdSetup_AfterCrash is an end-to-end test: setup → simulate crash
+// (RAM disk gone) → setup again. Verifies that the second setup heals the
+// dangling symlinks and re-creates the RAM disk mount.
+func TestCmdSetup_AfterCrash(t *testing.T) {
+	tmp := t.TempDir()
+	cursorDir := filepath.Join(tmp, "Cursor")
+	ramdisk := filepath.Join(tmp, "RAM")
+	_ = os.MkdirAll(ramdisk, 0o755)
+	_ = os.MkdirAll(filepath.Join(cursorDir, "Cache"), 0o755)
+	_ = os.WriteFile(filepath.Join(cursorDir, "Cache", "f"), []byte("original"), 0o644)
+
+	a := newApp()
+	a.cursorDir = cursorDir
+	a.ramdisk = ramdisk
+	a.dirs = []string{"Cache"}
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return nil, errors.New("not running")
+		}
+		return newApp().runOutput(name, args...)
+	}
+	a.run = func(name string, args ...string) error {
+		if name == "tmutil" || name == "diskutil" {
+			return nil
+		}
+		return newApp().run(name, args...)
+	}
+
+	// First setup.
+	if err := a.cmdSetup(true); err != nil {
+		t.Fatal(err)
+	}
+	assertIsSymlink(t, filepath.Join(cursorDir, "Cache"))
+
+	// Write live data on the "RAM disk", then create a .sync.
+	dest := filepath.Join(ramdisk, flattenPath("Cache"))
+	_ = os.WriteFile(filepath.Join(dest, "live.txt"), []byte("live-data"), 0o644)
+	syncDir := filepath.Join(cursorDir, "Cache") + ".sync"
+	_ = os.MkdirAll(syncDir, 0o755)
+	_ = os.WriteFile(filepath.Join(syncDir, "live.txt"), []byte("synced-data"), 0o644)
+
+	// Simulate crash: blow away the RAM disk.
+	_ = os.RemoveAll(ramdisk)
+	_ = os.MkdirAll(ramdisk, 0o755)
+
+	// Second setup — should heal from .sync, then re-setup.
+	a2 := newApp()
+	a2.cursorDir = cursorDir
+	a2.ramdisk = ramdisk
+	a2.dirs = []string{"Cache"}
+	a2.stdout = io.Discard
+	a2.stderr = io.Discard
+	a2.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return nil, errors.New("not running")
+		}
+		return newApp().runOutput(name, args...)
+	}
+	a2.run = func(name string, args ...string) error {
+		if name == "tmutil" || name == "diskutil" {
+			return nil
+		}
+		return newApp().run(name, args...)
+	}
+
+	if err := a2.cmdSetup(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should be a symlink again, and the RAM disk copy should have .sync content.
+	assertIsSymlink(t, filepath.Join(cursorDir, "Cache"))
+	got := readFile(t, filepath.Join(cursorDir, "Cache", "live.txt"))
+	if got != "synced-data" {
+		t.Fatalf("expected synced-data (from .sync), got %q", got)
+	}
+}
+
+// TestCmdSetup_AfterCrashOrigFallback is like TestCmdSetup_AfterCrash but
+// with no .sync available — falls back to .orig.
+func TestCmdSetup_AfterCrashOrigFallback(t *testing.T) {
+	tmp := t.TempDir()
+	cursorDir := filepath.Join(tmp, "Cursor")
+	ramdisk := filepath.Join(tmp, "RAM")
+	_ = os.MkdirAll(ramdisk, 0o755)
+	_ = os.MkdirAll(filepath.Join(cursorDir, "Cache"), 0o755)
+	_ = os.WriteFile(filepath.Join(cursorDir, "Cache", "f"), []byte("original"), 0o644)
+
+	a := newApp()
+	a.cursorDir = cursorDir
+	a.ramdisk = ramdisk
+	a.dirs = []string{"Cache"}
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return nil, errors.New("not running")
+		}
+		return newApp().runOutput(name, args...)
+	}
+	a.run = func(name string, args ...string) error {
+		if name == "tmutil" || name == "diskutil" {
+			return nil
+		}
+		return newApp().run(name, args...)
+	}
+
+	if err := a.cmdSetup(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash: blow away the RAM disk. No .sync exists.
+	_ = os.RemoveAll(ramdisk)
+	_ = os.MkdirAll(ramdisk, 0o755)
+
+	a2 := newApp()
+	a2.cursorDir = cursorDir
+	a2.ramdisk = ramdisk
+	a2.dirs = []string{"Cache"}
+	a2.stdout = io.Discard
+	a2.stderr = io.Discard
+	a2.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return nil, errors.New("not running")
+		}
+		return newApp().runOutput(name, args...)
+	}
+	a2.run = func(name string, args ...string) error {
+		if name == "tmutil" || name == "diskutil" {
+			return nil
+		}
+		return newApp().run(name, args...)
+	}
+
+	if err := a2.cmdSetup(true); err != nil {
+		t.Fatal(err)
+	}
+
+	assertIsSymlink(t, filepath.Join(cursorDir, "Cache"))
+	// Content should be from .orig (the original "original" file).
+	got := readFile(t, filepath.Join(cursorDir, "Cache", "f"))
+	if got != "original" {
+		t.Fatalf("expected original (from .orig), got %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cmdInstallSync tests
+// ---------------------------------------------------------------------------
+
+func TestCmdInstallSync_Happy(t *testing.T) {
+	tmp := t.TempDir()
+	exePath := filepath.Join(tmp, "cursor-ramdisk")
+	_ = os.WriteFile(exePath, []byte("fake"), 0o755)
+
+	a := newApp()
+	a.userHome = func() (string, error) { return tmp, nil }
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.executable = func() (string, error) { return exePath, nil }
+
+	var launchctlArgs []string
+	a.run = func(name string, args ...string) error {
+		if name == "launchctl" {
+			launchctlArgs = args
+			return nil
+		}
+		return fmt.Errorf("unexpected run %s", name)
+	}
+
+	if err := a.cmdInstallSync(); err != nil {
+		t.Fatal(err)
+	}
+
+	plistPath := filepath.Join(tmp, "Library", "LaunchAgents", "com.cursor-ramdisk.sync.plist")
+	data, err := os.ReadFile(plistPath)
+	if err != nil {
+		t.Fatalf("plist not written: %v", err)
+	}
+	plistStr := string(data)
+	if !strings.Contains(plistStr, "com.cursor-ramdisk.sync") {
+		t.Fatal("plist missing label")
+	}
+	if !strings.Contains(plistStr, "<integer>300</integer>") {
+		t.Fatal("plist missing StartInterval 300")
+	}
+	if !strings.Contains(plistStr, exePath) {
+		t.Fatalf("plist missing exe path %q; plist:\n%s", exePath, plistStr)
+	}
+	if !strings.Contains(plistStr, "<false/>") {
+		t.Fatal("plist missing RunAtLoad false")
+	}
+	if !strings.Contains(plistStr, "/tmp/cursor-ramdisk-sync.log") {
+		t.Fatal("plist missing log path")
+	}
+	if len(launchctlArgs) < 3 || launchctlArgs[0] != "bootstrap" {
+		t.Fatalf("unexpected launchctl args: %v", launchctlArgs)
+	}
+	if !strings.HasPrefix(launchctlArgs[1], "gui/") {
+		t.Fatalf("expected gui/<uid>, got %s", launchctlArgs[1])
+	}
+}
+
+func TestCmdInstallSync_ExecutableError(t *testing.T) {
+	a := newApp()
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.executable = func() (string, error) {
+		return "", errors.New("no executable")
+	}
+	err := a.cmdInstallSync()
+	if err == nil || !strings.Contains(err.Error(), "executable path") {
+		t.Fatalf("expected executable error, got %v", err)
+	}
+}
+
+func TestCmdInstallSync_HomeDirError(t *testing.T) {
+	tmp := t.TempDir()
+	exePath := filepath.Join(tmp, "cursor-ramdisk")
+	_ = os.WriteFile(exePath, []byte("fake"), 0o755)
+
+	a := newApp()
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.executable = func() (string, error) { return exePath, nil }
+	a.userHome = func() (string, error) { return "", errors.New("no home") }
+
+	err := a.cmdInstallSync()
+	if err == nil || !strings.Contains(err.Error(), "home dir") {
+		t.Fatalf("expected home error, got %v", err)
+	}
+}
+
+func TestCmdInstallSync_LaunchctlError(t *testing.T) {
+	tmp := t.TempDir()
+	exePath := filepath.Join(tmp, "cursor-ramdisk")
+	_ = os.WriteFile(exePath, []byte("fake"), 0o755)
+
+	a := newApp()
+	a.userHome = func() (string, error) { return tmp, nil }
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.executable = func() (string, error) { return exePath, nil }
+	a.run = func(name string, args ...string) error {
+		if name == "launchctl" {
+			return errors.New("launchctl failed")
+		}
+		return fmt.Errorf("unexpected %s", name)
+	}
+
+	err := a.cmdInstallSync()
+	if err == nil || !strings.Contains(err.Error(), "launchctl bootstrap") {
+		t.Fatalf("expected launchctl error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cmdUninstallSync tests
+// ---------------------------------------------------------------------------
+
+func TestCmdUninstallSync_Happy(t *testing.T) {
+	tmp := t.TempDir()
+	plistDir := filepath.Join(tmp, "Library", "LaunchAgents")
+	_ = os.MkdirAll(plistDir, 0o755)
+	plistPath := filepath.Join(plistDir, "com.cursor-ramdisk.sync.plist")
+	_ = os.WriteFile(plistPath, []byte("<plist/>"), 0o644)
+
+	a := newApp()
+	a.userHome = func() (string, error) { return tmp, nil }
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.run = func(name string, args ...string) error {
+		if name == "launchctl" {
+			return nil
+		}
+		return fmt.Errorf("unexpected %s", name)
+	}
+
+	if err := a.cmdUninstallSync(); err != nil {
+		t.Fatal(err)
+	}
+	assertNotExist(t, plistPath)
+}
+
+func TestCmdUninstallSync_NotInstalled(t *testing.T) {
+	tmp := t.TempDir()
+	// No plist or LaunchAgents dir created.
+	a := newApp()
+	a.userHome = func() (string, error) { return tmp, nil }
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.run = func(name string, args ...string) error {
+		if name == "launchctl" {
+			return errors.New("bootout: no such service")
+		}
+		return fmt.Errorf("unexpected %s", name)
+	}
+	// Missing plist is a no-op for remove — should not error.
+	if err := a.cmdUninstallSync(); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCmdUninstallSync_BootoutWarn(t *testing.T) {
+	tmp := t.TempDir()
+	plistDir := filepath.Join(tmp, "Library", "LaunchAgents")
+	_ = os.MkdirAll(plistDir, 0o755)
+	plistPath := filepath.Join(plistDir, "com.cursor-ramdisk.sync.plist")
+	_ = os.WriteFile(plistPath, []byte("<plist/>"), 0o644)
+
+	a := newApp()
+	a.userHome = func() (string, error) { return tmp, nil }
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.run = func(name string, args ...string) error {
+		if name == "launchctl" {
+			return errors.New("bootout failed")
+		}
+		return fmt.Errorf("unexpected %s", name)
+	}
+
+	// Should succeed overall; bootout failure is only a warning.
+	if err := a.cmdUninstallSync(); err != nil {
+		t.Fatal(err)
+	}
+	// Plist must still be removed despite bootout failure.
+	assertNotExist(t, plistPath)
+}
+
+func TestCmdUninstallSync_RemoveError(t *testing.T) {
+	tmp := t.TempDir()
+	plistDir := filepath.Join(tmp, "Library", "LaunchAgents")
+	_ = os.MkdirAll(plistDir, 0o755)
+	plistPath := filepath.Join(plistDir, "com.cursor-ramdisk.sync.plist")
+	_ = os.WriteFile(plistPath, []byte("<plist/>"), 0o644)
+
+	a := newApp()
+	a.userHome = func() (string, error) { return tmp, nil }
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.run = func(name string, args ...string) error {
+		if name == "launchctl" {
+			return nil
+		}
+		return fmt.Errorf("unexpected %s", name)
+	}
+	a.remove = func(name string) error {
+		if name == plistPath {
+			return errors.New("permission denied")
+		}
+		return os.Remove(name)
+	}
+
+	err := a.cmdUninstallSync()
+	if err == nil || !strings.Contains(err.Error(), "remove plist") {
+		t.Fatalf("expected remove error, got %v", err)
+	}
+}
+
+func TestCmdUninstallSync_HomeDirError(t *testing.T) {
+	a := newApp()
+	a.stdout = io.Discard
+	a.stderr = io.Discard
+	a.userHome = func() (string, error) { return "", errors.New("no home") }
+	err := a.cmdUninstallSync()
+	if err == nil || !strings.Contains(err.Error(), "home dir") {
+		t.Fatalf("expected home error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// teardown .sync fallback and cleanup tests
+// ---------------------------------------------------------------------------
+
+func TestDoTestTeardown_RAMGoneSyncRestore(t *testing.T) {
+	env := newTestEnv(t)
+	a := testAppForDoTest(t)
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+	for _, d := range defaultTargetDirs {
+		if d != "Cache" {
+			_ = os.RemoveAll(filepath.Join(env.cursorDir, filepath.FromSlash(d)))
+		}
+	}
+	if err := doTestSetup(t, a, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a .sync backup with distinct content to verify it is preferred over .orig.
+	src := filepath.Join(env.cursorDir, "Cache")
+	syncDir := src + ".sync"
+	_ = os.MkdirAll(syncDir, 0o755)
+	_ = os.WriteFile(filepath.Join(syncDir, "synced.txt"), []byte("from-sync"), 0o644)
+
+	// Simulate RAM disk gone.
+	_ = os.RemoveAll(filepath.Join(env.ramdiskDir, flattenPath("Cache")))
+
+	if err := doTestTeardown(t, a, true); err != nil {
+		t.Fatal(err)
+	}
+
+	assertIsDir(t, src)
+	assertNotExist(t, syncDir)
+	assertNotExist(t, src+".orig") // .sync restore removes .orig too
+	got := readFile(t, filepath.Join(src, "synced.txt"))
+	if got != "from-sync" {
+		t.Fatalf("expected .sync content, got %q", got)
+	}
+}
+
+func TestDoTestTeardown_HappyPath_SyncCleanup(t *testing.T) {
+	env := newTestEnv(t)
+	a := testAppForDoTest(t)
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+	if err := doTestSetup(t, a, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .sync backups to simulate previous periodic syncs.
+	for _, d := range defaultTargetDirs {
+		syncDir := filepath.Join(env.cursorDir, filepath.FromSlash(d)) + ".sync"
+		_ = os.MkdirAll(syncDir, 0o755)
+		_ = os.WriteFile(filepath.Join(syncDir, "old.txt"), []byte("stale"), 0o644)
+	}
+
+	if err := doTestTeardown(t, a, true); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, d := range defaultTargetDirs {
+		src := filepath.Join(env.cursorDir, filepath.FromSlash(d))
+		assertIsDir(t, src)
+		assertNotExist(t, src+".orig")
+		assertNotExist(t, src+".sync")
+	}
+}
+
+func TestCmdTeardown_RAMGoneSyncRestore(t *testing.T) {
+	env := newTestEnv(t)
+	for _, d := range defaultTargetDirs {
+		if d != "Cache" {
+			_ = os.RemoveAll(filepath.Join(env.cursorDir, filepath.FromSlash(d)))
+		}
+	}
+	a := testAppForDoTest(t)
+	a.cursorDir = env.cursorDir
+	a.ramdisk = env.ramdiskDir
+	if err := doTestSetup(t, a, true); err != nil {
+		t.Fatal(err)
+	}
+
+	src := filepath.Join(env.cursorDir, "Cache")
+	syncDir := src + ".sync"
+	_ = os.MkdirAll(syncDir, 0o755)
+	_ = os.WriteFile(filepath.Join(syncDir, "synced.txt"), []byte("from-sync"), 0o644)
+	_ = os.RemoveAll(filepath.Join(env.ramdiskDir, flattenPath("Cache")))
+
+	a2 := newApp()
+	a2.cursorDir = env.cursorDir
+	a2.ramdisk = env.ramdiskDir
+	a2.stdout = io.Discard
+	a2.stderr = io.Discard
+	a2.runOutput = func(name string, args ...string) ([]byte, error) {
+		if name == "pgrep" {
+			return nil, errors.New("not running")
+		}
+		return newApp().runOutput(name, args...)
+	}
+	if err := a2.cmdTeardown(true); err != nil {
+		t.Fatal(err)
+	}
+
+	assertIsDir(t, src)
+	assertNotExist(t, syncDir)
+	assertNotExist(t, src+".orig")
+	got := readFile(t, filepath.Join(src, "synced.txt"))
+	if got != "from-sync" {
+		t.Fatalf("expected .sync content, got %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runArgs routing tests for new subcommands
+// ---------------------------------------------------------------------------
+
+func TestRunArgs_SyncSubcommands(t *testing.T) {
+	t.Run("sync_ok", func(t *testing.T) {
+		tmp := t.TempDir()
+		a := newApp()
+		a.cursorDir = filepath.Join(tmp, "Cursor")
+		a.ramdisk = filepath.Join(tmp, "nonexistent-ram")
+		a.stdout = io.Discard
+		a.stderr = io.Discard
+		if c := a.runArgs([]string{"sync"}); c != 0 {
+			t.Fatalf("exit %d want 0", c)
+		}
+	})
+
+	t.Run("install_sync_ok", func(t *testing.T) {
+		tmp := t.TempDir()
+		exePath := filepath.Join(tmp, "cursor-ramdisk")
+		_ = os.WriteFile(exePath, []byte("fake"), 0o755)
+
+		a := newApp()
+		a.userHome = func() (string, error) { return tmp, nil }
+		a.stdout = io.Discard
+		a.stderr = io.Discard
+		a.executable = func() (string, error) { return exePath, nil }
+		a.run = func(name string, args ...string) error {
+			if name == "launchctl" {
+				return nil
+			}
+			return fmt.Errorf("unexpected %s", name)
+		}
+		if c := a.runArgs([]string{"install-sync"}); c != 0 {
+			t.Fatalf("exit %d want 0", c)
+		}
+	})
+
+	t.Run("uninstall_sync_ok", func(t *testing.T) {
+		tmp := t.TempDir()
+		a := newApp()
+		a.userHome = func() (string, error) { return tmp, nil }
+		a.stdout = io.Discard
+		a.stderr = io.Discard
+		a.run = func(name string, args ...string) error {
+			if name == "launchctl" {
+				return errors.New("not loaded")
+			}
+			return fmt.Errorf("unexpected %s", name)
+		}
+		if c := a.runArgs([]string{"uninstall-sync"}); c != 0 {
+			t.Fatalf("exit %d want 0", c)
+		}
+	})
 }

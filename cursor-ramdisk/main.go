@@ -35,21 +35,22 @@ type runner func(name string, args ...string) error
 type outputRunner func(name string, args ...string) ([]byte, error)
 
 type app struct {
-	run       runner
-	runOutput outputRunner
-	stdin     io.Reader
-	stderr    io.Writer
-	stdout    io.Writer
-	ramdisk   string
-	volName   string
-	headroom  int
-	dirs      []string
-	cursorDir string
-	userHome  func() (string, error)
-	rename    func(oldpath, newpath string) error
-	symlink   func(oldpath, newpath string) error
-	remove    func(name string) error
-	removeAll func(path string) error
+	run        runner
+	runOutput  outputRunner
+	stdin      io.Reader
+	stderr     io.Writer
+	stdout     io.Writer
+	ramdisk    string
+	volName    string
+	headroom   int
+	dirs       []string
+	cursorDir  string
+	userHome   func() (string, error)
+	executable func() (string, error)
+	rename     func(oldpath, newpath string) error
+	symlink    func(oldpath, newpath string) error
+	remove     func(name string) error
+	removeAll  func(path string) error
 }
 
 const (
@@ -89,6 +90,7 @@ func newApp() *app {
 	a.runOutput = func(name string, args ...string) ([]byte, error) {
 		return exec.Command(name, args...).Output()
 	}
+	a.executable = os.Executable
 	a.rename = os.Rename
 	a.symlink = os.Symlink
 	a.remove = os.Remove
@@ -125,6 +127,12 @@ func (a *app) runArgs(args []string) int {
 		err = a.cmdTeardown(yes)
 	case "status":
 		err = a.cmdStatus()
+	case "sync":
+		err = a.cmdSync()
+	case "install-sync":
+		err = a.cmdInstallSync()
+	case "uninstall-sync":
+		err = a.cmdUninstallSync()
 	default:
 		a.usage()
 		return 1
@@ -141,9 +149,12 @@ func (a *app) usage() {
 	fmt.Fprintf(a.stderr, `cursor-ramdisk: manage Cursor IDE state on a RAM disk
 
 Usage:
-  cursor-ramdisk [-y] setup     move hot dirs to RAM disk and symlink back (idempotent)
-  cursor-ramdisk [-y] teardown  rsync RAM disk state back to disk, remove symlinks
-  cursor-ramdisk status         show current state of each target directory
+  cursor-ramdisk [-y] setup         move hot dirs to RAM disk and symlink back (idempotent)
+  cursor-ramdisk [-y] teardown      rsync RAM disk state back to disk, remove symlinks
+  cursor-ramdisk status             show current state of each target directory
+  cursor-ramdisk sync               rsync RAM disk -> .sync on disk (no-op if Cursor not running)
+  cursor-ramdisk install-sync       install launchd agent to run sync every 5 minutes
+  cursor-ramdisk uninstall-sync     remove the launchd sync agent and its plist
 
 Flags:
   -y  non-interactive: skip all confirmation prompts
@@ -156,12 +167,73 @@ Cursor must not be running for setup or teardown.
 // Commands
 // ---------------------------------------------------------------------------
 
+// healDanglingSymlinks detects symlinks whose targets no longer exist (e.g.
+// the RAM disk vanished after a reboot) and restores them from .sync or .orig.
+// This lets setup work correctly after an unclean reboot without requiring the
+// user to run teardown first.
+func (a *app) healDanglingSymlinks(cursorDir string) error {
+	for _, dir := range a.dirs {
+		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
+		info, err := os.Lstat(src)
+		if err != nil {
+			continue // missing entirely — pendingDirs will skip it too
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			continue // regular dir, nothing to heal
+		}
+		if symlinkTargetExists(src) {
+			continue // valid symlink pointing at a live RAM disk
+		}
+
+		// Dangling symlink — RAM disk is gone. Restore from best available backup.
+		orig := src + ".orig"
+		syncDir := src + ".sync"
+
+		a.logf("Healing dangling symlink: %s", dir)
+
+		if _, statErr := os.Stat(syncDir); statErr == nil {
+			a.logf("  Restoring from .sync (most recent periodic backup)...")
+			if err := a.remove(src); err != nil {
+				return fmt.Errorf("remove dangling symlink %s: %w", src, err)
+			}
+			if err := a.rename(syncDir, src); err != nil {
+				return fmt.Errorf("restore sync %s -> %s: %w", syncDir, src, err)
+			}
+			if err := a.removeAll(orig); err != nil {
+				a.logf("WARN: could not remove .orig %s: %v", orig, err)
+			}
+			a.logf("  Restored from .sync: %s", dir)
+		} else if _, statErr2 := os.Stat(orig); statErr2 == nil {
+			a.logf("  Restoring from .orig (cold backup from last setup)...")
+			if err := a.remove(src); err != nil {
+				return fmt.Errorf("remove dangling symlink %s: %w", src, err)
+			}
+			if err := a.rename(orig, src); err != nil {
+				return fmt.Errorf("restore orig %s -> %s: %w", orig, src, err)
+			}
+			a.logf("  Restored from .orig: %s", dir)
+		} else {
+			a.logf("  WARN: no .sync or .orig for %s -- removing dangling symlink", dir)
+			if err := a.remove(src); err != nil {
+				return fmt.Errorf("remove dangling symlink %s: %w", src, err)
+			}
+			// Dir won't exist; pendingDirs will skip it and Cursor will recreate it.
+		}
+	}
+	return nil
+}
+
 // cmdSetup is idempotent: it skips any directory that is already a symlink
-// pointing at the RAM disk. On first run it takes an APFS snapshot, measures
-// the actual disk usage of pending directories, creates a right-sized RAM disk
-// (measured total + headroom MB), copies each target directory onto it,
-// saves the original as <dir>.orig (never touched again), and replaces the
-// original path with a symlink.
+// pointing at a live RAM disk. Dangling symlinks (left after a reboot that
+// erased the RAM disk) are healed automatically from .sync or .orig before
+// the pending-dirs check, so setup works after an unclean reboot without
+// requiring teardown first.
+//
+// On first run it takes an APFS snapshot, measures the actual disk usage of
+// pending directories, creates a right-sized RAM disk (measured total +
+// headroom MB), copies each target directory onto it, saves the original as
+// <dir>.orig (never touched again), and replaces the original path with a
+// symlink.
 //
 // .orig is a one-time cold backup taken at setup time. All durable state is
 // managed by teardown (which rsyncs the live RAM disk back to disk).
@@ -172,6 +244,11 @@ func (a *app) cmdSetup(yes bool) error {
 	}
 
 	if err := a.guardCursorNotRunning(); err != nil {
+		return err
+	}
+
+	// Heal dangling symlinks left by a crash/reboot before checking pending.
+	if err := a.healDanglingSymlinks(cursorDir); err != nil {
 		return err
 	}
 
@@ -284,8 +361,22 @@ func (a *app) cmdTeardown(yes bool) error {
 
 		if _, err := os.Stat(dest); errors.Is(err, fs.ErrNotExist) {
 			a.logf("WARN: RAM disk dest %s missing -- RAM disk may be gone", dest)
-			a.logf("      Restoring from .orig if available...")
-			if _, statErr := os.Stat(orig); statErr == nil {
+			a.logf("      Restoring from .sync or .orig if available...")
+			syncDir := src + ".sync"
+			if _, statErr := os.Stat(syncDir); statErr == nil {
+				// Prefer .sync — the most recent periodic backup.
+				if err := a.remove(src); err != nil {
+					return fmt.Errorf("remove dangling symlink %s: %w", src, err)
+				}
+				if err := a.rename(syncDir, src); err != nil {
+					return fmt.Errorf("restore sync %s -> %s: %w", syncDir, src, err)
+				}
+				if err := a.removeAll(orig); err != nil {
+					a.logf("WARN: could not remove .orig %s: %v", orig, err)
+				}
+				a.logf("  Restored from .sync: %s", dir)
+			} else if _, statErr2 := os.Stat(orig); statErr2 == nil {
+				// Fall back to .orig cold backup.
 				if err := a.remove(src); err != nil {
 					return fmt.Errorf("remove dangling symlink %s: %w", src, err)
 				}
@@ -294,7 +385,7 @@ func (a *app) cmdTeardown(yes bool) error {
 				}
 				a.logf("  Restored from .orig: %s", dir)
 			} else {
-				a.logf("  ERROR: no .orig found either -- %s is unrecoverable", dir)
+				a.logf("  ERROR: no .sync or .orig found -- %s is unrecoverable", dir)
 			}
 			continue
 		}
@@ -315,9 +406,13 @@ func (a *app) cmdTeardown(yes bool) error {
 			return fmt.Errorf("rename %s -> %s: %w", newDir, src, err)
 		}
 
-		// .orig is now redundant -- the on-disk directory is current.
+		// .orig and any .sync backup are now redundant -- the on-disk directory is current.
 		if err := a.removeAll(orig); err != nil {
 			a.logf("WARN: could not remove .orig %s: %v", orig, err)
+		}
+		syncDir := src + ".sync"
+		if err := a.removeAll(syncDir); err != nil {
+			a.logf("WARN: could not remove .sync %s: %v", syncDir, err)
 		}
 
 		a.logf("Done: %s", dir)
@@ -634,6 +729,141 @@ func (a *app) syncDir(src, dest string) error {
 	if err := a.run("rsync", "-a", "--delete", srcSlash, dest); err != nil {
 		return fmt.Errorf("rsync %s -> %s: %w", src, dest, err)
 	}
+	return nil
+}
+
+// cmdSync rsyncs each active RAM disk directory to a <dir>.sync sibling on disk.
+// It is a no-op (returns nil) if the RAM disk is not mounted or Cursor is not
+// running, so it is safe to call from a launchd timer at any time.
+func (a *app) cmdSync() error {
+	cursorDir, err := a.cursorAppSupportDir()
+	if err != nil {
+		return err
+	}
+
+	// RAM disk not mounted — nothing to sync.
+	if _, err := os.Stat(a.ramdisk); errors.Is(err, fs.ErrNotExist) {
+		a.logf("RAM disk not mounted at %s -- skipping sync.", a.ramdisk)
+		return nil
+	}
+
+	// Cursor not running — data is not changing, skip to stay quiet.
+	if _, err := a.runOutput("pgrep", "-x", "Cursor"); err != nil {
+		a.logf("Cursor is not running -- skipping sync.")
+		return nil
+	}
+
+	active := a.activeDirs(cursorDir)
+	if len(active) == 0 {
+		a.logf("No directories are on the RAM disk. Nothing to sync.")
+		return nil
+	}
+
+	for _, dir := range active {
+		ramDir := filepath.Join(a.ramdisk, flattenPath(dir))
+		syncDest := filepath.Join(cursorDir, filepath.FromSlash(dir)) + ".sync"
+		a.logf("Syncing %s -> %s ...", ramDir, syncDest)
+		if err := a.syncDir(ramDir, syncDest); err != nil {
+			return fmt.Errorf("sync %s -> %s: %w", ramDir, syncDest, err)
+		}
+	}
+
+	a.logf("Sync complete.")
+	return nil
+}
+
+// launchAgentPlistPath returns the path to the launchd plist for the sync agent:
+// ~/Library/LaunchAgents/com.cursor-ramdisk.sync.plist
+func (a *app) launchAgentPlistPath() (string, error) {
+	homeFn := a.userHome
+	if homeFn == nil {
+		homeFn = os.UserHomeDir
+	}
+	home, err := homeFn()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", "com.cursor-ramdisk.sync.plist"), nil
+}
+
+// cmdInstallSync writes a launchd plist that runs `cursor-ramdisk -y sync`
+// every 5 minutes and bootstraps it into the current GUI session.
+func (a *app) cmdInstallSync() error {
+	execFn := a.executable
+	if execFn == nil {
+		execFn = os.Executable
+	}
+	exePath, err := execFn()
+	if err != nil {
+		return fmt.Errorf("executable path: %w", err)
+	}
+
+	plistPath, err := a.launchAgentPlistPath()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir LaunchAgents: %w", err)
+	}
+
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.cursor-ramdisk.sync</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>%s</string>
+		<string>-y</string>
+		<string>sync</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>/tmp/cursor-ramdisk-sync.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/cursor-ramdisk-sync.log</string>
+</dict>
+</plist>
+`, exePath)
+
+	if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
+		return fmt.Errorf("write plist %s: %w", plistPath, err)
+	}
+	a.logf("Wrote %s", plistPath)
+
+	target := fmt.Sprintf("gui/%d", os.Getuid())
+	if err := a.run("launchctl", "bootstrap", target, plistPath); err != nil {
+		return fmt.Errorf("launchctl bootstrap %s %s: %w", target, plistPath, err)
+	}
+
+	a.logf("Sync agent installed. Runs every 5 minutes while Cursor is running.")
+	return nil
+}
+
+// cmdUninstallSync bootouts the sync launchd agent and removes its plist.
+// A launchctl failure is treated as a warning (the agent may not have been
+// loaded), but the plist is always removed so the agent won't reload on login.
+func (a *app) cmdUninstallSync() error {
+	plistPath, err := a.launchAgentPlistPath()
+	if err != nil {
+		return err
+	}
+
+	target := fmt.Sprintf("gui/%d", os.Getuid())
+	if err := a.run("launchctl", "bootout", target, plistPath); err != nil {
+		a.logf("WARN: launchctl bootout failed (agent may not be loaded): %v", err)
+	}
+
+	if err := a.remove(plistPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove plist %s: %w", plistPath, err)
+	}
+
+	a.logf("Sync agent uninstalled.")
 	return nil
 }
 
