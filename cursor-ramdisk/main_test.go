@@ -1136,87 +1136,47 @@ func TestGuardCursorNotRunning(t *testing.T) {
 	})
 }
 
-func TestPhysRAMAvailableMB(t *testing.T) {
+func TestPhysRAMTotalMB(t *testing.T) {
 	t.Run("happy", func(t *testing.T) {
 		a := newApp()
 		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-				return []byte("65536\n"), nil
-			}
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.pagesize" {
-				return []byte("16384\n"), nil
+			if name == "sysctl" && len(args) == 2 && args[1] == "hw.memsize" {
+				// 36 GB = 38654705664 bytes
+				return []byte("38654705664\n"), nil
 			}
 			return nil, fmt.Errorf("unexpected sysctl %v", args)
 		}
-		mb, err := a.physRAMAvailableMB()
+		mb, err := a.physRAMTotalMB()
 		if err != nil {
 			t.Fatal(err)
 		}
-		// 65536 pages * 16384 bytes / 1024 / 1024 = 1024 MB
-		if mb != 1024 {
-			t.Fatalf("expected 1024 MB, got %d", mb)
+		if mb != 36864 {
+			t.Fatalf("expected 36864 MB, got %d", mb)
 		}
 	})
 
-	t.Run("page_free_count_error", func(t *testing.T) {
+	t.Run("sysctl_error", func(t *testing.T) {
 		a := newApp()
 		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-				return nil, errors.New("sysctl failed")
-			}
-			return nil, errors.New("unexpected")
+			return nil, errors.New("sysctl failed")
 		}
-		_, err := a.physRAMAvailableMB()
-		if err == nil || !strings.Contains(err.Error(), "vm.page_free_count") {
-			t.Fatalf("expected page_free_count error, got %v", err)
+		_, err := a.physRAMTotalMB()
+		if err == nil || !strings.Contains(err.Error(), "hw.memsize") {
+			t.Fatalf("expected hw.memsize error, got %v", err)
 		}
 	})
 
-	t.Run("page_free_count_parse_error", func(t *testing.T) {
+	t.Run("parse_error", func(t *testing.T) {
 		a := newApp()
 		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
+			if name == "sysctl" && len(args) == 2 && args[1] == "hw.memsize" {
 				return []byte("notanumber\n"), nil
 			}
 			return nil, errors.New("unexpected")
 		}
-		_, err := a.physRAMAvailableMB()
-		if err == nil || !strings.Contains(err.Error(), "parse vm.page_free_count") {
+		_, err := a.physRAMTotalMB()
+		if err == nil || !strings.Contains(err.Error(), "parse hw.memsize") {
 			t.Fatalf("expected parse error, got %v", err)
-		}
-	})
-
-	t.Run("pagesize_error", func(t *testing.T) {
-		a := newApp()
-		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-				return []byte("65536\n"), nil
-			}
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.pagesize" {
-				return nil, errors.New("sysctl failed")
-			}
-			return nil, errors.New("unexpected")
-		}
-		_, err := a.physRAMAvailableMB()
-		if err == nil || !strings.Contains(err.Error(), "vm.pagesize") {
-			t.Fatalf("expected pagesize error, got %v", err)
-		}
-	})
-
-	t.Run("pagesize_parse_error", func(t *testing.T) {
-		a := newApp()
-		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-				return []byte("65536\n"), nil
-			}
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.pagesize" {
-				return []byte("notanumber\n"), nil
-			}
-			return nil, errors.New("unexpected")
-		}
-		_, err := a.physRAMAvailableMB()
-		if err == nil || !strings.Contains(err.Error(), "parse vm.pagesize") {
-			t.Fatalf("expected parse pagesize error, got %v", err)
 		}
 	})
 }
@@ -1343,19 +1303,16 @@ func TestEnsureRamdisk(t *testing.T) {
 		a := newApp()
 		a.ramdisk = filepath.Join(tmp, "missing-mount")
 		a.stdout = io.Discard
-		// Report only 1 free page * 4096 bytes = 4 KB free -> 0 MB
+		// Report 8 GB total -> 25% reserve (2048 MB) -> max 6144 MB available
 		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-				return []byte("1\n"), nil
-			}
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.pagesize" {
-				return []byte("4096\n"), nil
+			if name == "sysctl" && len(args) == 2 && args[1] == "hw.memsize" {
+				return []byte("8589934592\n"), nil // 8 GB
 			}
 			return nil, errors.New("unexpected")
 		}
-		err := a.ensureRamdisk(9999)
-		if err == nil || !strings.Contains(err.Error(), "not enough free physical RAM") {
-			t.Fatalf("expected not enough RAM error, got %v", err)
+		err := a.ensureRamdisk(9999) // request 9999 MB > 6144 MB available
+		if err == nil || !strings.Contains(err.Error(), "RAM disk too large") {
+			t.Fatalf("expected RAM disk too large error, got %v", err)
 		}
 	})
 
@@ -1364,11 +1321,8 @@ func TestEnsureRamdisk(t *testing.T) {
 		a := newApp()
 		a.ramdisk = filepath.Join(tmp, "missing-mount")
 		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-				return []byte("2097152\n"), nil
-			}
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.pagesize" {
-				return []byte("16384\n"), nil
+			if name == "sysctl" && len(args) == 2 && args[1] == "hw.memsize" {
+				return []byte("38654705664\n"), nil // 36 GB
 			}
 			return nil, errors.New("unexpected")
 		}
@@ -1384,11 +1338,8 @@ func TestEnsureRamdisk(t *testing.T) {
 		a := newApp()
 		a.ramdisk = filepath.Join(tmp, "missing-mount")
 		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-				return []byte("65536\n"), nil
-			}
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.pagesize" {
-				return []byte("16384\n"), nil
+			if name == "sysctl" && len(args) == 2 && args[1] == "hw.memsize" {
+				return []byte("38654705664\n"), nil // 36 GB
 			}
 			if name == "hdiutil" {
 				return []byte("/dev/disk999\n"), nil
@@ -1413,11 +1364,8 @@ func TestEnsureRamdisk(t *testing.T) {
 		a := newApp()
 		a.ramdisk = filepath.Join(tmp, "missing-mount")
 		a.runOutput = func(name string, args ...string) ([]byte, error) {
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-				return []byte("65536\n"), nil
-			}
-			if name == "sysctl" && len(args) == 2 && args[1] == "vm.pagesize" {
-				return []byte("16384\n"), nil
+			if name == "sysctl" && len(args) == 2 && args[1] == "hw.memsize" {
+				return []byte("38654705664\n"), nil // 36 GB
 			}
 			if name == "hdiutil" {
 				return []byte("/dev/disk42\n"), nil
@@ -1773,11 +1721,8 @@ func TestCmdSetup_EnsureRamdiskError(t *testing.T) {
 		if name == "du" && args[0] == "-sm" {
 			return []byte("1\t.\n"), nil
 		}
-		if name == "sysctl" && len(args) == 2 && args[1] == "vm.page_free_count" {
-			return []byte("524288\n"), nil
-		}
-		if name == "sysctl" && len(args) == 2 && args[1] == "vm.pagesize" {
-			return []byte("16384\n"), nil
+		if name == "sysctl" && len(args) == 2 && args[1] == "hw.memsize" {
+			return []byte("38654705664\n"), nil // 36 GB
 		}
 		if name == "hdiutil" {
 			return nil, errors.New("hdiutil failed")

@@ -562,32 +562,20 @@ func (a *app) dirSizeMB(path string) (int, error) {
 	return mb, nil
 }
 
-// physRAMAvailableMB returns the number of megabytes of free physical RAM
-// by reading vm.page_free_count and vm.pagesize via sysctl.
-// The freeMB value is intentionally conservative: it only counts pages the
-// kernel currently marks free, so it may be lower than what macOS would
-// actually reclaim from inactive/speculative caches.
-func (a *app) physRAMAvailableMB() (int, error) {
-	freeOut, err := a.runOutput("sysctl", "-n", "vm.page_free_count")
+// physRAMTotalMB returns the total physical RAM in megabytes via sysctl hw.memsize.
+// This is used instead of vm.page_free_count because macOS aggressively holds
+// pages as inactive/purgeable/speculative — the kernel "free" count can be a
+// tiny fraction of what's actually available for allocation.
+func (a *app) physRAMTotalMB() (int, error) {
+	out, err := a.runOutput("sysctl", "-n", "hw.memsize")
 	if err != nil {
-		return 0, fmt.Errorf("sysctl vm.page_free_count: %w", err)
+		return 0, fmt.Errorf("sysctl hw.memsize: %w", err)
 	}
-	var freePages int
-	if _, err := fmt.Sscan(strings.TrimSpace(string(freeOut)), &freePages); err != nil {
-		return 0, fmt.Errorf("parse vm.page_free_count %q: %w", strings.TrimSpace(string(freeOut)), err)
+	var memBytes int64
+	if _, err := fmt.Sscan(strings.TrimSpace(string(out)), &memBytes); err != nil {
+		return 0, fmt.Errorf("parse hw.memsize %q: %w", strings.TrimSpace(string(out)), err)
 	}
-
-	sizeOut, err := a.runOutput("sysctl", "-n", "vm.pagesize")
-	if err != nil {
-		return 0, fmt.Errorf("sysctl vm.pagesize: %w", err)
-	}
-	var pageSize int
-	if _, err := fmt.Sscan(strings.TrimSpace(string(sizeOut)), &pageSize); err != nil {
-		return 0, fmt.Errorf("parse vm.pagesize %q: %w", strings.TrimSpace(string(sizeOut)), err)
-	}
-
-	freeMB := (freePages * pageSize) / (1024 * 1024)
-	return freeMB, nil
+	return int(memBytes / (1024 * 1024)), nil
 }
 
 // ensureRamdisk creates a RAM disk of sizeMB at a.ramdisk if one is not
@@ -612,16 +600,25 @@ func (a *app) ensureRamdisk(sizeMB int) error {
 		return nil
 	}
 
-	availMB, err := a.physRAMAvailableMB()
+	totalMB, err := a.physRAMTotalMB()
 	if err != nil {
 		return fmt.Errorf("check available RAM: %w", err)
 	}
-	a.logf("Physical RAM free: %d MB  requested: %d MB", availMB, sizeMB)
-	if sizeMB > availMB {
+	// Reserve 8 GB or 25% of total RAM (whichever is smaller) for the OS
+	// and other applications. The rest can safely be used for the RAM disk
+	// since macOS will reclaim inactive/purgeable/speculative pages as needed.
+	reserveMB := totalMB / 4
+	if reserveMB > 8192 {
+		reserveMB = 8192
+	}
+	maxMB := totalMB - reserveMB
+	a.logf("Physical RAM: %d MB total, %d MB reserve, %d MB available for RAM disk, %d MB requested",
+		totalMB, reserveMB, maxMB, sizeMB)
+	if sizeMB > maxMB {
 		return fmt.Errorf(
-			"not enough free physical RAM: need %d MB but only %d MB free -- "+
-				"reduce headroom or close other applications first",
-			sizeMB, availMB,
+			"RAM disk too large: need %d MB but only %d MB available "+
+				"(%d MB total - %d MB reserve) -- reduce headroom or close other applications",
+			sizeMB, maxMB, totalMB, reserveMB,
 		)
 	}
 
