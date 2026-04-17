@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Notify on IP change after cloudflare-dynamic-dns runs.
+# Reads the tool's state file for the instance, compares to our last-notified
+# value, and emails via send-email when the address differs. On the first run
+# (no prior notify state) it sends a single email with only the New IP.
+#
+# Intended to be invoked from a systemd drop-in:
+#   ExecStartPost=/opt/scripts/cfddns-notify %i
+# where %i is the config basename (e.g. "128-nj", "hypervisor6"). The config
+# file at /etc/cloudflare-dynamic-dns/config.d/<instance>.yaml is read to find
+# the iface, stack, and domains, which together identify the tool's state file
+# under /var/lib/cloudflare-dynamic-dns/.
+set -euo pipefail
+export PATH="/opt/scripts:$PATH"
+
+INSTANCE="${1:-}"
+if [[ -z "$INSTANCE" ]]; then
+    echo "Usage: $0 <instance-name>" >&2
+    exit 1
+fi
+
+HOSTNAME="$(hostname)"
+DISPLAY_NAME="$HOSTNAME DDNS IP Change"
+TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S %Z")
+CONFIG_FILE="/etc/cloudflare-dynamic-dns/config.d/${INSTANCE}.yaml"
+TOOL_STATE_DIR="${CFDDNS_NOTIFY_TOOL_STATE_DIR:-/var/lib/cloudflare-dynamic-dns}"
+STATE_DIR="${CFDDNS_NOTIFY_STATE_DIR:-/var/cache/cfddns-notify}"
+NOTIFY_EMAIL_TO="${CFDDNS_NOTIFY_EMAIL_TO:-alex@goodkind.io}"
+
+if [[ ! -r "$CONFIG_FILE" ]]; then
+    echo "cfddns-notify: missing or unreadable config: $CONFIG_FILE" >&2
+    exit 0
+fi
+
+read_yaml_scalar() {
+    local key="$1"
+    local file="$2"
+    awk -v k="$key" '
+        $0 ~ "^[[:space:]]*" k "[[:space:]]*:" {
+            sub("^[[:space:]]*" k "[[:space:]]*:[[:space:]]*", "")
+            sub("[[:space:]]*#.*$", "")
+            gsub("^\"|\"$", "")
+            gsub("^'\''|'\''$", "")
+            print
+            exit
+        }
+    ' "$file"
+}
+
+IFACE="$(read_yaml_scalar iface "$CONFIG_FILE")"
+STACK="$(read_yaml_scalar stack "$CONFIG_FILE")"
+STACK="${STACK:-ipv6}"
+
+STATE_PREFIX="${IFACE:-none}_${STACK}_"
+TOOL_STATE_FILE=""
+for candidate in "$TOOL_STATE_DIR/${STATE_PREFIX}"*; do
+    if [[ -f "$candidate" ]]; then
+        TOOL_STATE_FILE="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$TOOL_STATE_FILE" ]]; then
+    exit 0
+fi
+
+NEW_IP="$(head -n1 "$TOOL_STATE_FILE" | tr -d '[:space:]')"
+[[ -z "$NEW_IP" ]] && exit 0
+
+mkdir -p "$STATE_DIR"
+NOTIFY_STATE_FILE="$STATE_DIR/${INSTANCE}.ip"
+OLD_IP=""
+if [[ -f "$NOTIFY_STATE_FILE" ]]; then
+    OLD_IP="$(head -n1 "$NOTIFY_STATE_FILE" | tr -d '[:space:]')"
+fi
+
+if [[ "$OLD_IP" == "$NEW_IP" ]]; then
+    exit 0
+fi
+
+MSG="The public IP address for ${DISPLAY_NAME} has changed.\n\n"
+MSG+="Instance: $INSTANCE\n"
+MSG+="New IP: $NEW_IP\n"
+[[ -n "$OLD_IP" ]] && MSG+="Old IP: $OLD_IP\n"
+MSG+="Stack: $STACK\n"
+MSG+="Time: $TIMESTAMP"
+
+"${CFDDNS_NOTIFY_SEND_EMAIL:-/opt/scripts/send-email}" \
+    -t "$NOTIFY_EMAIL_TO" \
+    -s "[cfddns] $HOSTNAME IP Address Changed ($STACK)" \
+    -m "$MSG" \
+    -n "$DISPLAY_NAME" \
+    -c "cfddns" || true
+
+printf '%s\n' "$NEW_IP" > "$NOTIFY_STATE_FILE"
