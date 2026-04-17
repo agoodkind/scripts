@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+readonly SCRIPT_NAME
+
+function usage() {
+    cat <<EOF
+Usage: $SCRIPT_NAME [-c count] [--file message_file] <recipient> [message]
+
+Send an iMessage using the macOS Messages app.
+
+Examples:
+  $SCRIPT_NAME "+15551234567" "Hello from my Mac"
+  $SCRIPT_NAME -c 3 "+15551234567" "Hello three times"
+  $SCRIPT_NAME --file ./imessage-goats.txt "+15551234567"
+  $SCRIPT_NAME "name@example.com" "Checking in"
+EOF
+}
+
+function send_message_once() {
+    local recipient="$1"
+    local message="$2"
+
+    osascript - "$recipient" "$message" <<'APPLESCRIPT'
+on run argv
+    set target_handle to item 1 of argv
+    set target_message to item 2 of argv
+
+    tell application "Messages"
+        launch
+        set target_service to 1st service whose service type = iMessage
+        set target_buddy to participant target_handle of target_service
+        send target_message to target_buddy
+    end tell
+end run
+APPLESCRIPT
+}
+
+function main() {
+    local count=1
+    local message_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -c|--count)
+                if [[ $# -lt 2 ]]; then
+                    usage >&2
+                    exit 1
+                fi
+                count="$2"
+                shift 2
+                ;;
+            -f|--file)
+                if [[ $# -lt 2 ]]; then
+                    usage >&2
+                    exit 1
+                fi
+                message_file="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                usage >&2
+                exit 1
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    if [[ $# -lt 1 ]]; then
+        usage >&2
+        exit 1
+    fi
+
+    if ! [[ "$count" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Count must be a positive integer." >&2
+        exit 1
+    fi
+
+    local recipient="$1"
+    shift
+    local message=""
+    local iteration
+
+    if [[ -n "$message_file" && $# -gt 0 ]]; then
+        echo "Use either an inline message or --file, not both." >&2
+        exit 1
+    fi
+
+    if [[ -n "$message_file" ]]; then
+        if [[ ! -r "$message_file" ]]; then
+            echo "Message file is not readable: $message_file" >&2
+            exit 1
+        fi
+        message="$(<"$message_file")"
+    else
+        if [[ $# -lt 1 ]]; then
+            usage >&2
+            exit 1
+        fi
+        message="$*"
+    fi
+
+    for ((iteration = 1; iteration <= count; iteration += 1)); do
+        send_message_once "$recipient" "$message"
+    done
+}
+
+main "$@"
