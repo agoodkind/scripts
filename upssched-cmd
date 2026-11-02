@@ -16,7 +16,7 @@ if [ -z "$UPS_NAME" ]; then
 fi
 
 # --- NOTIFICATION HELPER ---
-# This ensures EVERY event logs to system journal AND sends an email
+# Log each notification and send an email.
 notify() {
     local SUBJECT="$1"
     local MSG="$2"
@@ -124,7 +124,7 @@ case $1 in
         ;;
 
     ups-comm-bad)
-        notify "⚠️ Comm Lost" "Server lost connection to UPS USB cable."
+        notify "⚠️ Comm Lost" "Server lost communication with the UPS."
         ;;
 
     ups-comm-ok)
@@ -136,7 +136,7 @@ case $1 in
         ;;
 
     ups-nocomm)
-        notify "⚠️ No Communication" "UPS is not communicating (stale data)."
+        # COMMBAD reports the initial loss; NOCOMM repeats until recovery.
         ;;
 
     ups-calibrating)
