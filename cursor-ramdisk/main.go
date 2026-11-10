@@ -85,6 +85,7 @@ func newApp() *app {
 		cmd := exec.Command(name, args...)
 		cmd.Stdout = a.stdout
 		cmd.Stderr = a.stderr
+
 		return cmd.Run()
 	}
 	a.runOutput = func(name string, args ...string) ([]byte, error) {
@@ -95,6 +96,7 @@ func newApp() *app {
 	a.symlink = os.Symlink
 	a.remove = os.Remove
 	a.removeAll = os.RemoveAll
+
 	return a
 }
 
@@ -104,6 +106,7 @@ func main() {
 
 func (a *app) runArgs(args []string) int {
 	yes := false
+
 	filtered := args[:0]
 	for _, arg := range args {
 		if arg == "-y" {
@@ -112,6 +115,7 @@ func (a *app) runArgs(args []string) int {
 			filtered = append(filtered, arg)
 		}
 	}
+
 	args = filtered
 
 	if len(args) < 1 {
@@ -142,11 +146,14 @@ func (a *app) runArgs(args []string) int {
 		fmt.Fprintf(a.stderr, "ERROR: %v\n", err)
 		return 1
 	}
+
 	return 0
 }
 
 func (a *app) usage() {
-	fmt.Fprintf(a.stderr, `cursor-ramdisk: manage Cursor IDE state on a RAM disk
+	fmt.Fprintf(
+		a.stderr,
+		`cursor-ramdisk: manage Cursor IDE state on a RAM disk
 
 Usage:
   cursor-ramdisk [-y] setup         move hot dirs to RAM disk and symlink back (idempotent)
@@ -160,7 +167,8 @@ Flags:
   -y  non-interactive: skip all confirmation prompts
 
 Cursor must not be running for setup or teardown.
-`)
+`,
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -178,9 +186,11 @@ func (a *app) healDanglingSymlinks(cursorDir string) error {
 		if err != nil {
 			continue // missing entirely — pendingDirs will skip it too
 		}
+
 		if info.Mode()&fs.ModeSymlink == 0 {
 			continue // regular dir, nothing to heal
 		}
+
 		if symlinkTargetExists(src) {
 			continue // valid symlink pointing at a live RAM disk
 		}
@@ -196,30 +206,37 @@ func (a *app) healDanglingSymlinks(cursorDir string) error {
 			if err := a.remove(src); err != nil {
 				return fmt.Errorf("remove dangling symlink %s: %w", src, err)
 			}
+
 			if err := a.rename(syncDir, src); err != nil {
 				return fmt.Errorf("restore sync %s -> %s: %w", syncDir, src, err)
 			}
+
 			if err := a.removeAll(orig); err != nil {
 				a.logf("WARN: could not remove .orig %s: %v", orig, err)
 			}
+
 			a.logf("  Restored from .sync: %s", dir)
 		} else if _, statErr2 := os.Stat(orig); statErr2 == nil {
 			a.logf("  Restoring from .orig (cold backup from last setup)...")
 			if err := a.remove(src); err != nil {
 				return fmt.Errorf("remove dangling symlink %s: %w", src, err)
 			}
+
 			if err := a.rename(orig, src); err != nil {
 				return fmt.Errorf("restore orig %s -> %s: %w", orig, src, err)
 			}
+
 			a.logf("  Restored from .orig: %s", dir)
 		} else {
 			a.logf("  WARN: no .sync or .orig for %s -- removing dangling symlink", dir)
 			if err := a.remove(src); err != nil {
 				return fmt.Errorf("remove dangling symlink %s: %w", src, err)
 			}
+
 			// Dir won't exist; pendingDirs will skip it and Cursor will recreate it.
 		}
 	}
+
 	return nil
 }
 
@@ -263,14 +280,16 @@ func (a *app) cmdSetup(yes bool) error {
 	if err != nil {
 		return err
 	}
+
 	ramdiskSizeMB := totalMB + a.headroom
 
 	a.logf("Directories to move:")
+
 	for _, dir := range pending {
 		a.logf("  %-30s  %d MB", dir, sizes[dir])
 	}
-	a.logf("Total: %d MB  +  %d MB headroom  =  %d MB RAM disk",
-		totalMB, a.headroom, ramdiskSizeMB)
+
+	a.logf("Total: %d MB  +  %d MB headroom  =  %d MB RAM disk", totalMB, a.headroom, ramdiskSizeMB)
 
 	if !yes {
 		if !a.confirm("Proceed with setup?") {
@@ -283,6 +302,7 @@ func (a *app) cmdSetup(yes bool) error {
 	if err := a.run("tmutil", "localsnapshot"); err != nil {
 		return fmt.Errorf("tmutil localsnapshot: %w", err)
 	}
+
 	a.logf("Snapshot created.")
 
 	if err := a.ensureRamdisk(ramdiskSizeMB); err != nil {
@@ -313,6 +333,7 @@ func (a *app) cmdSetup(yes bool) error {
 	}
 
 	fmt.Fprintln(a.stdout)
+
 	return a.cmdStatus()
 }
 
@@ -338,6 +359,7 @@ func (a *app) cmdTeardown(yes bool) error {
 	}
 
 	a.logf("Directories to sync back to disk:")
+
 	for _, dir := range active {
 		dest := filepath.Join(a.ramdisk, flattenPath(dir))
 		if _, err := os.Stat(dest); errors.Is(err, fs.ErrNotExist) {
@@ -368,25 +390,31 @@ func (a *app) cmdTeardown(yes bool) error {
 				if err := a.remove(src); err != nil {
 					return fmt.Errorf("remove dangling symlink %s: %w", src, err)
 				}
+
 				if err := a.rename(syncDir, src); err != nil {
 					return fmt.Errorf("restore sync %s -> %s: %w", syncDir, src, err)
 				}
+
 				if err := a.removeAll(orig); err != nil {
 					a.logf("WARN: could not remove .orig %s: %v", orig, err)
 				}
+
 				a.logf("  Restored from .sync: %s", dir)
 			} else if _, statErr2 := os.Stat(orig); statErr2 == nil {
 				// Fall back to .orig cold backup.
 				if err := a.remove(src); err != nil {
 					return fmt.Errorf("remove dangling symlink %s: %w", src, err)
 				}
+
 				if err := a.rename(orig, src); err != nil {
 					return fmt.Errorf("restore orig %s -> %s: %w", orig, src, err)
 				}
+
 				a.logf("  Restored from .orig: %s", dir)
 			} else {
 				a.logf("  ERROR: no .sync or .orig found -- %s is unrecoverable", dir)
 			}
+
 			continue
 		}
 
@@ -402,6 +430,7 @@ func (a *app) cmdTeardown(yes bool) error {
 		if err := a.remove(src); err != nil {
 			return fmt.Errorf("remove symlink %s: %w", src, err)
 		}
+
 		if err := a.rename(newDir, src); err != nil {
 			return fmt.Errorf("rename %s -> %s: %w", newDir, src, err)
 		}
@@ -410,6 +439,7 @@ func (a *app) cmdTeardown(yes bool) error {
 		if err := a.removeAll(orig); err != nil {
 			a.logf("WARN: could not remove .orig %s: %v", orig, err)
 		}
+
 		syncDir := src + ".sync"
 		if err := a.removeAll(syncDir); err != nil {
 			a.logf("WARN: could not remove .sync %s: %v", syncDir, err)
@@ -431,6 +461,7 @@ func (a *app) cmdTeardown(yes bool) error {
 			a.logf("RAM disk ejected.")
 		}
 	}
+
 	return nil
 }
 
@@ -439,6 +470,7 @@ func (a *app) cmdStatus() error {
 	if err != nil {
 		return err
 	}
+
 	return a.printStatus(cursorDir)
 }
 
@@ -459,7 +491,9 @@ func (a *app) confirm(prompt string) bool {
 	if !scanner.Scan() {
 		return false
 	}
+
 	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+
 	return answer == "y" || answer == "yes"
 }
 
@@ -467,14 +501,17 @@ func (a *app) cursorAppSupportDir() (string, error) {
 	if a.cursorDir != "" {
 		return a.cursorDir, nil
 	}
+
 	homeFn := a.userHome
 	if homeFn == nil {
 		homeFn = os.UserHomeDir
 	}
+
 	home, err := homeFn()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
+
 	return filepath.Join(home, "Library", "Application Support", "Cursor"), nil
 }
 
@@ -490,7 +527,9 @@ func (a *app) guardCursorNotRunning() error {
 	if err == nil {
 		return errors.New("Cursor is still running -- quit it first")
 	}
+
 	a.logf("Cursor is not running. Proceeding.")
+
 	return nil
 }
 
@@ -498,17 +537,21 @@ func (a *app) guardCursorNotRunning() error {
 // i.e. still need to be moved to the RAM disk.
 func (a *app) pendingDirs(cursorDir string) []string {
 	var pending []string
+
 	for _, dir := range a.dirs {
 		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
 		info, err := os.Lstat(src)
 		if err != nil {
 			continue
 		}
+
 		if info.Mode()&fs.ModeSymlink != 0 {
 			continue
 		}
+
 		pending = append(pending, dir)
 	}
+
 	return pending
 }
 
@@ -516,22 +559,28 @@ func (a *app) pendingDirs(cursorDir string) []string {
 // (i.e. on the RAM disk), used by teardown to know what to sync back.
 func (a *app) activeDirs(cursorDir string) []string {
 	var active []string
+
 	for _, dir := range a.dirs {
 		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
 		info, err := os.Lstat(src)
 		if err != nil {
 			continue
 		}
+
 		if info.Mode()&fs.ModeSymlink != 0 {
 			active = append(active, dir)
 		}
 	}
+
 	return active
 }
 
 // measureDirs returns the total size in MB of each dir in dirs, and a per-dir
 // map. It uses `du -sm` (megabytes, one line per dir) for speed.
-func (a *app) measureDirs(cursorDir string, dirs []string) (totalMB int, sizes map[string]int, err error) {
+func (a *app) measureDirs(
+	cursorDir string,
+	dirs []string,
+) (totalMB int, sizes map[string]int, err error) {
 	sizes = make(map[string]int, len(dirs))
 	for _, dir := range dirs {
 		src := filepath.Join(cursorDir, filepath.FromSlash(dir))
@@ -539,9 +588,11 @@ func (a *app) measureDirs(cursorDir string, dirs []string) (totalMB int, sizes m
 		if e != nil {
 			return 0, nil, fmt.Errorf("measure %s: %w", dir, e)
 		}
+
 		sizes[dir] = mb
 		totalMB += mb
 	}
+
 	return totalMB, sizes, nil
 }
 
@@ -551,14 +602,17 @@ func (a *app) dirSizeMB(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("du -sm %s: %w", path, err)
 	}
+
 	fields := strings.Fields(string(out))
 	if len(fields) == 0 {
 		return 0, fmt.Errorf("du -sm %s: empty output", path)
 	}
+
 	var mb int
 	if _, err := fmt.Sscan(fields[0], &mb); err != nil {
 		return 0, fmt.Errorf("du -sm %s: parse %q: %w", path, fields[0], err)
 	}
+
 	return mb, nil
 }
 
@@ -571,10 +625,12 @@ func (a *app) physRAMTotalMB() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("sysctl hw.memsize: %w", err)
 	}
+
 	var memBytes int64
 	if _, err := fmt.Sscan(strings.TrimSpace(string(out)), &memBytes); err != nil {
 		return 0, fmt.Errorf("parse hw.memsize %q: %w", strings.TrimSpace(string(out)), err)
 	}
+
 	return int(memBytes / (1024 * 1024)), nil
 }
 
@@ -589,14 +645,26 @@ func (a *app) ensureRamdisk(sizeMB int) error {
 		if dfErr != nil {
 			a.logf("WARN: could not determine current RAM disk size: %v", dfErr)
 			a.logf("RAM disk already mounted at %s, proceeding anyway.", a.ramdisk)
+
 			return nil
 		}
+
 		if currentMB < sizeMB {
 			return fmt.Errorf(
 				"RAM disk at %s is %d MB but %d MB is needed -- run teardown first, then re-run setup",
-				a.ramdisk, currentMB, sizeMB)
+				a.ramdisk,
+				currentMB,
+				sizeMB,
+			)
 		}
-		a.logf("RAM disk already mounted at %s (%d MB >= %d MB needed), skipping creation.", a.ramdisk, currentMB, sizeMB)
+
+		a.logf(
+			"RAM disk already mounted at %s (%d MB >= %d MB needed), skipping creation.",
+			a.ramdisk,
+			currentMB,
+			sizeMB,
+		)
+
 		return nil
 	}
 
@@ -604,6 +672,7 @@ func (a *app) ensureRamdisk(sizeMB int) error {
 	if err != nil {
 		return fmt.Errorf("check available RAM: %w", err)
 	}
+
 	// Reserve 8 GB or 25% of total RAM (whichever is smaller) for the OS
 	// and other applications. The rest can safely be used for the RAM disk
 	// since macOS will reclaim inactive/purgeable/speculative pages as needed.
@@ -611,22 +680,30 @@ func (a *app) ensureRamdisk(sizeMB int) error {
 	if reserveMB > 8192 {
 		reserveMB = 8192
 	}
+
 	maxMB := totalMB - reserveMB
-	a.logf("Physical RAM: %d MB total, %d MB reserve, %d MB available for RAM disk, %d MB requested",
-		totalMB, reserveMB, maxMB, sizeMB)
+	a.logf(
+		"Physical RAM: %d MB total, %d MB reserve, %d MB available for RAM disk, %d MB requested",
+		totalMB,
+		reserveMB,
+		maxMB,
+		sizeMB,
+	)
 	if sizeMB > maxMB {
 		return fmt.Errorf(
 			"RAM disk too large: need %d MB but only %d MB available "+
 				"(%d MB total - %d MB reserve) -- reduce headroom or close other applications",
-			sizeMB, maxMB, totalMB, reserveMB,
+			sizeMB,
+			maxMB,
+			totalMB,
+			reserveMB,
 		)
 	}
 
 	sectors := sizeMB * 2048
 	a.logf("Creating %d MB RAM disk...", sizeMB)
 
-	attachOut, err := a.runOutput("hdiutil", "attach", "-nomount",
-		fmt.Sprintf("ram://%d", sectors))
+	attachOut, err := a.runOutput("hdiutil", "attach", "-nomount", fmt.Sprintf("ram://%d", sectors))
 	if err != nil {
 		return fmt.Errorf("hdiutil attach: %w", err)
 	}
@@ -639,6 +716,7 @@ func (a *app) ensureRamdisk(sizeMB int) error {
 	}
 
 	a.logf("RAM disk mounted at %s", a.ramdisk)
+
 	return nil
 }
 
@@ -649,18 +727,22 @@ func (a *app) ramdiskSizeMB() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("df -m %s: %w", a.ramdisk, err)
 	}
+
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) < 2 {
 		return 0, fmt.Errorf("df -m %s: unexpected output", a.ramdisk)
 	}
+
 	fields := strings.Fields(lines[1])
 	if len(fields) < 2 {
 		return 0, fmt.Errorf("df -m %s: unexpected fields in %q", a.ramdisk, lines[1])
 	}
+
 	var mb int
 	if _, err := fmt.Sscan(fields[1], &mb); err != nil {
 		return 0, fmt.Errorf("df -m %s: parse %q: %w", a.ramdisk, fields[1], err)
 	}
+
 	return mb, nil
 }
 
@@ -669,7 +751,9 @@ func symlinkTargetExists(link string) bool {
 	if err != nil {
 		return false
 	}
+
 	_, err = os.Stat(target)
+
 	return err == nil
 }
 
@@ -681,6 +765,7 @@ func (a *app) printStatus(cursorDir string) error {
 			a.logf("  MISS  %s (not found)", dir)
 			continue
 		}
+
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", src, err)
 		}
@@ -698,6 +783,7 @@ func (a *app) printStatus(cursorDir string) error {
 			a.logf("  DISK  %s (%s)", dir, a.dirSize(src))
 		}
 	}
+
 	return nil
 }
 
@@ -706,16 +792,19 @@ func (a *app) dirSize(path string) string {
 	if err != nil {
 		return "?"
 	}
+
 	fields := strings.Fields(string(out))
 	if len(fields) == 0 {
 		return "?"
 	}
+
 	if fields[0] == "0" {
 		entries, readErr := os.ReadDir(path)
 		if readErr == nil && len(entries) == 0 {
 			return "empty"
 		}
 	}
+
 	return fields[0]
 }
 
@@ -726,6 +815,7 @@ func (a *app) syncDir(src, dest string) error {
 	if err := a.run("rsync", "-a", "--delete", srcSlash, dest); err != nil {
 		return fmt.Errorf("rsync %s -> %s: %w", src, dest, err)
 	}
+
 	return nil
 }
 
@@ -766,6 +856,7 @@ func (a *app) cmdSync() error {
 	}
 
 	a.logf("Sync complete.")
+
 	return nil
 }
 
@@ -776,10 +867,12 @@ func (a *app) launchAgentPlistPath() (string, error) {
 	if homeFn == nil {
 		homeFn = os.UserHomeDir
 	}
+
 	home, err := homeFn()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
+
 	return filepath.Join(home, "Library", "LaunchAgents", "com.cursor-ramdisk.sync.plist"), nil
 }
 
@@ -790,6 +883,7 @@ func (a *app) cmdInstallSync() error {
 	if execFn == nil {
 		execFn = os.Executable
 	}
+
 	exePath, err := execFn()
 	if err != nil {
 		return fmt.Errorf("executable path: %w", err)
@@ -804,7 +898,8 @@ func (a *app) cmdInstallSync() error {
 		return fmt.Errorf("mkdir LaunchAgents: %w", err)
 	}
 
-	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+	plist := fmt.Sprintf(
+		`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -826,11 +921,14 @@ func (a *app) cmdInstallSync() error {
 	<string>/tmp/cursor-ramdisk-sync.log</string>
 </dict>
 </plist>
-`, exePath)
+`,
+		exePath,
+	)
 
 	if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
 		return fmt.Errorf("write plist %s: %w", plistPath, err)
 	}
+
 	a.logf("Wrote %s", plistPath)
 
 	target := fmt.Sprintf("gui/%d", os.Getuid())
@@ -839,6 +937,7 @@ func (a *app) cmdInstallSync() error {
 	}
 
 	a.logf("Sync agent installed. Runs every 5 minutes while Cursor is running.")
+
 	return nil
 }
 
@@ -861,6 +960,7 @@ func (a *app) cmdUninstallSync() error {
 	}
 
 	a.logf("Sync agent uninstalled.")
+
 	return nil
 }
 
@@ -884,5 +984,6 @@ func (a *app) copyDir(src, dest string) error {
 	if err := a.run("cp", "-a", src, dest); err != nil {
 		return fmt.Errorf("cp -a %s %s: %w", src, dest, err)
 	}
+
 	return nil
 }
