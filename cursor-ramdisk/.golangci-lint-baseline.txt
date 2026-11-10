@@ -1,0 +1,33 @@
+# golangci-lint: generated_at=2026-11-10T14:15:00Z
+main.go:846:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:204:1: `if statErr == nil` has complex nested blocks (complexity: 8) (nestif)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:344:15: Function 'cmdTeardown' is too long (114 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:344:1: cognitive complexity 52 of func `(*app).cmdTeardown` is high (> 30) (gocognit)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:384:1: `if errors.Is(err, fs.ErrNotExist)` has complex nested blocks (complexity: 13) (nestif)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:864:1: Comment should end in a period (godot)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:528:10: ST1005: error strings should not be capitalized (staticcheck)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:528:10: do not define dynamic errors, use wrapped static errors instead: "errors.New(\"Cursor is still running -- quit it first\")" (err113)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:583:17: named return "sizes" with type "map[string]int" must not be referenced or used by a naked return (nonamedreturns)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:583:4: named return "totalMB" with type "int" must not be referenced or used by a naked return (nonamedreturns)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:587:3: variable name 'mb' is too short for the scope of its usage (varnamelen)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:608:13: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"du -sm %s: empty output\", path)" (err113)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:619:1: godoc line is too long (81 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:634:32: Magic number: 1024, in <operation> detected (mnd)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:653:11: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\n\t\"RAM disk at %s is %d MB but %d MB is needed -- run teardown first, then re-run setup\",\n\ta.ramdisk,\n\tcurrentMB,\n\tsizeMB,\n)" (err113)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:679:25: Magic number: 4, in <operation> detected (mnd)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:680:17: Magic number: 8192, in <condition> detected (mnd)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:680:5: minmax: if statement can be modernized using min (modernize)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:693:10: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\n\t\"RAM disk too large: need %d MB but only %d MB available \"+\n\t\t\"(%d MB total - %d MB reserve) -- reduce headroom or close other applications\",\n\tsizeMB,\n\tmaxMB,\n\ttotalMB,\n\treserveMB,\n)" (err113)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:69:1: godoc line is too long (82 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:703:22: Magic number: 2048, in <operation> detected (mnd)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:737:19: Magic number: 2, in <condition> detected (mnd)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:733:13: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"df -m %s: unexpected output\", a.ramdisk)" (err113)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:738:13: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"df -m %s: unexpected fields in %q\", a.ramdisk, lines[1])" (err113)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:73:2: variable name 'a' is too short for the scope of its usage (varnamelen)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:766:4: continue with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:863:1: godoc line is too long (78 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:840:3: error is not nil (line 838) but it returns nil (nilerr)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:92:22: os/exec.Command must not be called. use os/exec.CommandContext (noctx)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main.go:928:12: G306: Expect WriteFile permissions to be 0600 or less (gosec)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main_test.go:655:4: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
+main_test.go:80:4: continue with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T14:15:00Z last_seen=2026-11-10T14:15:00Z
